@@ -3,7 +3,7 @@ import re
 from typing import Any
 
 from app.core.errors import AppError
-from app.schemas.dataset import AnalysisPlan, FilterCondition
+from app.schemas.dataset import AnalysisPlan, DateFilter, FilterCondition, PipelineStep
 from app.services.ai.base import AIProvider
 
 
@@ -39,9 +39,63 @@ class MockAIProvider(AIProvider):
         date_column = _find_column(question, names, dates) or default_date
         group = _find_column(question, names, categorical)
         if not group:
-            question_folded = q.casefold()
-            group = next((item["name"] for item in columns if item["name"] in categorical and any(_normalized(str(value)) in question_folded for value in item.get("sample_values", []) if str(value).strip())), None)
+            question_folded = f" {q.casefold()} "
+            group = next((item["name"] for item in columns if item["name"] in categorical and any(len(_normalized(str(value))) >= 2 and f" {_normalized(str(value))} " in question_folded for value in item.get("sample_values", []) if str(value).strip())), None)
         aggregation = "mean" if re.search(r"\b(average|mean)\b", q) else "median" if "median" in q else "min" if re.search(r"\b(minimum|min)\b", q) else "max" if re.search(r"\b(maximum|max)\b", q) else "sum"
+
+        consecutive_match = re.search(r"(declined|decreased|grew|increased).+?(\d+)\s+consecutive\s+months", q)
+        if consecutive_match and group and date_column:
+            periods = int(consecutive_match.group(2))
+            direction = "consecutive_decline" if consecutive_match.group(1) in {"declined", "decreased"} else "consecutive_growth"
+            return AnalysisPlan(operation="pipeline", metric=metric or default_metric, group_by=[group], date_column=date_column, limit=100, steps=[PipelineStep(operation="trend", metric=metric or default_metric, group_by=[group], date_column=date_column, time_granularity="month"), PipelineStep(operation=direction, periods=periods)])
+
+        if "moving average" in q and date_column:
+            window_match = re.search(r"(\d+)[ -](?:month|period)", q)
+            return AnalysisPlan(operation="moving_average", metric=metric or default_metric, date_column=date_column, time_granularity="month", window=int(window_match.group(1)) if window_match else 3, limit=100)
+
+        if "increased" in q and "decreased" in q and group and date_column:
+            mentioned_numeric = [name for name in names if name in numeric and _find_column(question, [name])]
+            if len(mentioned_numeric) >= 2:
+                return AnalysisPlan(operation="compare_segments", metric=mentioned_numeric[0], secondary_metric=mentioned_numeric[1], aggregation="sum", secondary_aggregation="mean", group_by=[group], date_column=date_column, period_mode="month", limit=100)
+
+        if "contribution" in q or "percent of total" in q or "percentage of total" in q:
+            if not group: raise AppError("Contribution analysis requires a category.", "AMBIGUOUS_QUESTION")
+            contribution_limit = re.search(r"top\s+(\d+)", q)
+            return AnalysisPlan(operation="contribution", metric=metric or default_metric, aggregation="sum", group_by=[group], sort="desc", limit=int(contribution_limit.group(1)) if contribution_limit else 100)
+
+        if "rank" in q and group:
+            mentioned_groups = [name for name in names if name in categorical and _find_column(question, [name])]
+            if len(mentioned_groups) >= 2:
+                return AnalysisPlan(operation="rank", metric=metric or default_metric, aggregation="sum", group_by=mentioned_groups, partition_by=[mentioned_groups[0]], limit=100)
+            return AnalysisPlan(operation="rank", metric=metric or default_metric, aggregation="sum", group_by=[group], limit=100)
+
+        each_match = re.search(r"top\s+(\d+).+?in each", q)
+        if each_match:
+            mentioned_groups = [name for name in names if name in categorical and _find_column(question, [name])]
+            if len(mentioned_groups) >= 2:
+                return AnalysisPlan(operation="rank", metric=metric or default_metric, aggregation="sum", group_by=mentioned_groups, partition_by=[mentioned_groups[0]], limit=int(each_match.group(1)))
+
+        if "variance" in q and group:
+            return AnalysisPlan(operation="variance", metric=metric or default_metric, aggregation="sum", group_by=[group], date_column=date_column if "month" in q else None, time_granularity="month" if "month" in q else None, sort="desc", limit=100)
+
+        if "correlation" in q:
+            mentioned_numeric = [name for name in names if name in numeric and _find_column(question, [name])]
+            if len(mentioned_numeric) >= 2:
+                return AnalysisPlan(operation="correlation", metric=mentioned_numeric[0], secondary_metric=mentioned_numeric[1])
+
+        if re.search(r"\b(q1.+q2|q2.+q1)\b", q) and date_column:
+            return AnalysisPlan(operation="trend", metric=metric or default_metric, aggregation=aggregation, group_by=[group] if group else [], date_column=date_column, time_granularity="quarter", limit=100)
+
+        relative = next(((phrase, period) for phrase, period in [("last 3 months", "last_3_months"), ("last 6 months", "last_6_months"), ("last 12 months", "last_12_months"), ("this month", "this_month"), ("previous month", "previous_month"), ("this quarter", "this_quarter"), ("previous quarter", "previous_quarter"), ("this year", "this_year"), ("previous year", "previous_year")] if phrase in q), None)
+        if relative and date_column and group:
+            filters: list[FilterCondition] = []
+            for item in columns:
+                if item["name"] in categorical:
+                    value = next((str(value) for value in item.get("sample_values", []) if len(_normalized(str(value))) >= 2 and f" {_normalized(str(value))} " in f" {q} "), None)
+                    if value and item["name"] != group: filters.append(FilterCondition(column=item["name"], operator="equals", value=value))
+            above = re.search(r"(?:above|greater than)\s+([\d,.]+)", q)
+            if above and (metric or default_metric): filters.append(FilterCondition(column=metric or default_metric, operator="greater_than", value=float(above.group(1).replace(",", ""))))
+            return AnalysisPlan(operation="group_and_aggregate", metric=metric or default_metric, aggregation=aggregation, group_by=[group], filters=filters, date_filter=DateFilter(column=date_column, period=relative[1]), sort="desc", limit=100)
 
         if re.search(r"\b(how many rows|row count|count rows|number of rows)\b", q):
             return AnalysisPlan(operation="count", aggregation="count")

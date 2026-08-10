@@ -54,18 +54,19 @@ class DatasetProfile(BaseModel):
 FilterOperator = Literal[
     "equals", "not_equals", "greater_than", "greater_than_or_equal",
     "less_than", "less_than_or_equal", "contains", "starts_with",
-    "ends_with", "between", "in", "before", "after",
+    "ends_with", "between", "in", "not_in", "before", "after",
+    "is_null", "is_not_null", "not_contains",
 ]
 
 
 class FilterCondition(BaseModel):
     column: str
     operator: FilterOperator
-    value: Any
+    value: Any = None
 
     @model_validator(mode="after")
     def validate_value_shape(self) -> "FilterCondition":
-        if self.operator in {"between", "in"} and not isinstance(self.value, list):
+        if self.operator in {"between", "in", "not_in"} and not isinstance(self.value, list):
             raise ValueError(f"Filter '{self.operator}' requires a list value")
         if self.operator == "between" and len(self.value) != 2:
             raise ValueError("Between requires exactly two values")
@@ -75,9 +76,39 @@ class FilterCondition(BaseModel):
 Operation = Literal[
     "aggregate", "group_and_aggregate", "filter", "sort", "top_n",
     "bottom_n", "count", "distinct_count", "trend", "compare_groups",
-    "compare_periods",
+    "compare_periods", "percent_of_total", "rank", "running_total",
+    "percentage_change", "contribution", "moving_average", "variance",
+    "correlation", "consecutive_growth", "consecutive_decline",
+    "compare_segments", "pipeline",
 ]
 Aggregation = Literal["sum", "mean", "min", "max", "count", "median"]
+
+
+RelativePeriod = Literal[
+    "today", "yesterday", "this_week", "previous_week", "this_month",
+    "previous_month", "last_3_months", "last_6_months", "last_12_months",
+    "this_quarter", "previous_quarter", "this_year", "previous_year",
+]
+
+
+class DateFilter(BaseModel):
+    column: str
+    period: RelativePeriod
+
+
+class SortRule(BaseModel):
+    column: str
+    direction: Literal["asc", "desc"] = "asc"
+
+
+class PipelineStep(BaseModel):
+    operation: Literal["trend", "calculate_change", "consecutive_growth", "consecutive_decline", "rank", "moving_average"]
+    metric: str | None = None
+    group_by: list[str] = Field(default_factory=list)
+    date_column: str | None = None
+    time_granularity: Literal["day", "week", "month", "quarter", "year"] | None = None
+    periods: int = Field(default=3, ge=1, le=24)
+    window: int = Field(default=3, ge=2, le=24)
 
 
 class AnalysisPlan(BaseModel):
@@ -86,12 +117,19 @@ class AnalysisPlan(BaseModel):
     aggregation: Aggregation | None = None
     group_by: list[str] = Field(default_factory=list)
     filters: list[FilterCondition] = Field(default_factory=list)
-    sort: Literal["asc", "desc"] | None = None
+    sort: Literal["asc", "desc"] | list[SortRule] | None = None
     limit: int = Field(default=10, ge=1, le=100)
     date_column: str | None = None
     time_granularity: Literal["day", "week", "month", "quarter", "year"] | None = None
     compare_values: list[str] = Field(default_factory=list, max_length=20)
     period_mode: Literal["month", "quarter", "year"] | None = None
+    date_filter: DateFilter | None = None
+    secondary_metric: str | None = None
+    secondary_aggregation: Aggregation | None = None
+    partition_by: list[str] = Field(default_factory=list)
+    window: int = Field(default=3, ge=2, le=24)
+    periods: int = Field(default=3, ge=1, le=24)
+    steps: list[PipelineStep] = Field(default_factory=list, max_length=10)
 
     @field_validator("group_by", mode="before")
     @classmethod
@@ -120,6 +158,8 @@ class AskResponse(BaseModel):
     answer: str
     result: Any
     chart_suggestion: ChartSuggestion | None = None
+    explanation: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class Insight(BaseModel):
@@ -135,6 +175,11 @@ class ChartRequest(BaseModel):
     question: str | None = Field(default=None, min_length=2, max_length=500)
     plan: AnalysisPlan | None = None
     chart_type: Literal["bar", "column", "line", "pie", "scatter"] | None = None
+    title: str | None = Field(default=None, max_length=120)
+    x_axis_label: str | None = Field(default=None, max_length=80)
+    y_axis_label: str | None = Field(default=None, max_length=80)
+    show_legend: bool = True
+    drill_down: FilterCondition | None = None
 
     @model_validator(mode="after")
     def require_question_or_plan(self) -> "ChartRequest":
@@ -151,6 +196,10 @@ class ChartResponse(BaseModel):
     data: list[dict[str, Any]]
     plan: AnalysisPlan
     interpreted_request: str
+    show_legend: bool = True
+    drill_down: dict[str, Any] | None = None
+    x_axis_label: str | None = None
+    y_axis_label: str | None = None
 
 
 class QualityIssue(BaseModel):
@@ -200,3 +249,39 @@ class CleaningApplyResponse(BaseModel):
     preview: CleaningPreview
     audit_entries: list[dict[str, Any]]
     profile: DatasetProfile
+    version: int | None = None
+
+
+class DatasetVersion(BaseModel):
+    version: int
+    created_at: datetime
+    operation: str
+    description: str
+    affected_rows: int = 0
+    source_version: int | None = None
+    is_current: bool = False
+
+
+class VersionListResponse(BaseModel):
+    current_version: int
+    versions: list[DatasetVersion]
+
+
+class ReportRequest(BaseModel):
+    title: str = Field(default="DataPilot AI Analysis Report", min_length=1, max_length=120)
+    include_profile: bool = True
+    include_insights: bool = True
+    include_quality: bool = True
+    include_charts: bool = True
+    include_version_history: bool = False
+
+
+class AnalyzeRequest(BaseModel):
+    plan: AnalysisPlan
+
+
+class AnalysisResponse(BaseModel):
+    plan: AnalysisPlan
+    result: Any
+    explanation: dict[str, Any]
+    metadata: dict[str, Any]

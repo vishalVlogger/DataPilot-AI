@@ -18,8 +18,11 @@ class DatasetStorage:
         dataset_id = str(uuid4())
         folder = self.root / dataset_id
         folder.mkdir(parents=True)
+        versions_folder = folder / "versions"
+        versions_folder.mkdir()
         frame.to_pickle(folder / "original.pkl")
         frame.to_pickle(folder / "data.pkl")
+        frame.to_pickle(versions_folder / "0.pkl")
         metadata: dict[str, Any] = {
             "id": dataset_id,
             "name": Path(name).name,
@@ -31,6 +34,8 @@ class DatasetStorage:
         }
         (folder / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
         (folder / "audit.json").write_text("[]", encoding="utf-8")
+        version_metadata = {"current_version": 0, "versions": [{"version": 0, "created_at": metadata["created_at"], "operation": "upload", "description": "Original uploaded dataset", "affected_rows": 0, "source_version": None}]}
+        (folder / "versions.json").write_text(json.dumps(version_metadata), encoding="utf-8")
         return metadata
 
     def load_frame(self, dataset_id: str) -> pd.DataFrame:
@@ -52,12 +57,7 @@ class DatasetStorage:
         frame.to_pickle(folder / "data.pkl")
 
     def reset(self, dataset_id: str) -> pd.DataFrame:
-        path = self.root / dataset_id / "original.pkl"
-        if not path.is_file():
-            raise DatasetNotFoundError()
-        frame = pd.read_pickle(path)
-        self.save_working_frame(dataset_id, frame)
-        self._write_audit(dataset_id, [])
+        frame, _ = self.restore_version(dataset_id, 0)
         return frame
 
     def load_original_frame(self, dataset_id: str) -> pd.DataFrame:
@@ -80,3 +80,41 @@ class DatasetStorage:
 
     def _write_audit(self, dataset_id: str, audit: list[dict[str, Any]]) -> None:
         (self.root / dataset_id / "audit.json").write_text(json.dumps(audit), encoding="utf-8")
+
+    def list_versions(self, dataset_id: str) -> dict[str, Any]:
+        path = self.root / dataset_id / "versions.json"
+        if not path.is_file():
+            raise DatasetNotFoundError()
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        for item in metadata["versions"]:
+            item["is_current"] = item["version"] == metadata["current_version"]
+        return metadata
+
+    def current_version(self, dataset_id: str) -> int:
+        return int(self.list_versions(dataset_id)["current_version"])
+
+    def create_version(self, dataset_id: str, frame: pd.DataFrame, operation: str, description: str, affected_rows: int = 0, source_version: int | None = None) -> int:
+        folder = self.root / dataset_id
+        metadata = self.list_versions(dataset_id)
+        version = max(item["version"] for item in metadata["versions"]) + 1
+        source = metadata["current_version"] if source_version is None else source_version
+        frame.to_pickle(folder / "versions" / f"{version}.pkl")
+        frame.to_pickle(folder / "data.pkl")
+        metadata["current_version"] = version
+        metadata["versions"].append({"version": version, "created_at": datetime.now(timezone.utc).isoformat(), "operation": operation, "description": description, "affected_rows": affected_rows, "source_version": source})
+        for item in metadata["versions"]:
+            item.pop("is_current", None)
+        (folder / "versions.json").write_text(json.dumps(metadata), encoding="utf-8")
+        return version
+
+    def load_version(self, dataset_id: str, version: int) -> pd.DataFrame:
+        path = self.root / dataset_id / "versions" / f"{version}.pkl"
+        if not path.is_file():
+            raise DatasetNotFoundError()
+        return pd.read_pickle(path)
+
+    def restore_version(self, dataset_id: str, version: int) -> tuple[pd.DataFrame, int]:
+        frame = self.load_version(dataset_id, version)
+        new_version = self.create_version(dataset_id, frame, "restore", f"Restored dataset version {version}", 0, source_version=version)
+        self.append_audit(dataset_id, [{"operation": "restore", "target_column": None, "affected_row_count": 0, "timestamp": datetime.now(timezone.utc).isoformat(), "source_version": version, "version": new_version}])
+        return frame, new_version

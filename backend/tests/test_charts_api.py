@@ -29,6 +29,12 @@ def test_invalid_chart_request() -> None:
         generate_chart(chart_frame(), AnalysisPlan(operation="aggregate", metric="Sales", aggregation="sum"), "bar")
 
 
+def test_chart_result_limit_and_drill_down_metadata() -> None:
+    frame = pd.DataFrame({"Region": [f"R{i}" for i in range(20)], "Sales": list(range(20))})
+    chart = generate_chart(frame, AnalysisPlan(operation="group_and_aggregate", metric="Sales", aggregation="sum", group_by=["Region"], limit=100), "bar", max_rows=5)
+    assert len(chart["data"]) == 5 and chart["drill_down"]["filter_template"]["column"] == "Region"
+
+
 def test_insights_quality_and_chart_endpoints(client) -> None:
     content = b"Region,Sales,Date\nWest,200,2026-01-01\nNorth,100,2026-02-01\n"
     dataset_id = client.post("/api/datasets/upload", files={"file": ("sales.csv", content, "text/csv")}).json()["id"]

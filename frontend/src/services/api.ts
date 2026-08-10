@@ -1,4 +1,4 @@
-import type { AskResponse, ChartResponse, ChartType, CleaningOperation, CleaningPreview, DatasetMetadata, DatasetProfile, Insight, QualityIssue } from "@/types/dataset";
+import type { AskResponse, ChartResponse, ChartType, CleaningOperation, CleaningPreview, DatasetMetadata, DatasetProfile, Insight, QualityIssue, ReportOptions, VersionList } from "@/types/dataset";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 
@@ -38,8 +38,22 @@ export async function getQuality(id: string): Promise<QualityIssue[]> {
   return parse(await fetch(`${API_URL}/datasets/${id}/quality`));
 }
 
-export async function createChart(id: string, question: string, chartType?: ChartType): Promise<ChartResponse> {
-  return parse(await fetch(`${API_URL}/datasets/${id}/chart`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, chart_type: chartType }) }));
+export async function createChart(id: string, question: string, chartType?: ChartType, title?: string): Promise<ChartResponse> {
+  return parse(await fetch(`${API_URL}/datasets/${id}/chart`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, chart_type: chartType, title }) }));
+}
+
+export async function getVersions(id: string): Promise<VersionList> {
+  return parse(await fetch(`${API_URL}/datasets/${id}/versions`));
+}
+
+export async function restoreVersion(id: string, version: number): Promise<{ profile: DatasetProfile; version: number }> {
+  return parse(await fetch(`${API_URL}/datasets/${id}/versions/${version}/restore`, { method: "POST" }));
+}
+
+export async function generateReport(id: string, options: ReportOptions): Promise<string> {
+  const response = await fetch(`${API_URL}/datasets/${id}/report`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(options) });
+  if (!response.ok) return parse<never>(response);
+  return response.text();
 }
 
 export async function previewCleaning(id: string, operations: CleaningOperation[]): Promise<CleaningPreview> {

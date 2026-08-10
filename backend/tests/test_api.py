@@ -20,3 +20,12 @@ def test_unsupported_question_is_standardized(client) -> None:
     response = client.post(f"/api/datasets/{uploaded.json()['id']}/ask", json={"question": "Forecast next year"})
     assert response.status_code == 400
     assert response.json()["error_code"] == "UNSUPPORTED_QUESTION"
+
+
+def test_validated_analyze_endpoint_returns_explainability(client) -> None:
+    uploaded = client.post("/api/datasets/upload", files={"file": ("sales.csv", b"Region,Sales\nWest,10\nNorth,20\n", "text/csv")})
+    dataset_id = uploaded.json()["id"]
+    response = client.post(f"/api/datasets/{dataset_id}/analyze", json={"plan": {"operation": "group_and_aggregate", "metric": "Sales", "aggregation": "sum", "group_by": ["Region"], "sort": "desc"}})
+    assert response.status_code == 200
+    assert response.json()["result"][0] == {"Region": "North", "Sales": 20}
+    assert response.json()["metadata"]["execution_engine"] == "pandas"

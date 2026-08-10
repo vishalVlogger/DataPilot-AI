@@ -39,4 +39,13 @@ export type AskResponse = {
   answer: string;
   result: unknown;
   plan: Record<string, unknown>;
+  chart_suggestion?: { type: ChartType } | null;
 };
+
+export type Insight = { type: string; severity: "info" | "warning" | "critical"; title: string; description: string; metric?: string | null; value?: number | string | null };
+export type QualityIssue = { issue_type: string; column: string | null; count: number; examples: string[]; severity: "info" | "warning" | "critical" };
+export type ChartType = "bar" | "column" | "line" | "pie" | "scatter";
+export type ChartResponse = { type: ChartType; title: string; x_axis: string; y_axis: string; data: Record<string, string | number | null>[]; plan: Record<string, unknown>; interpreted_request: string };
+export type CleaningType = "remove_duplicates" | "trim_whitespace" | "standardize_lowercase" | "standardize_uppercase" | "standardize_titlecase" | "remove_missing_rows" | "fill_missing_mean" | "fill_missing_median" | "fill_missing_value";
+export type CleaningOperation = { type: CleaningType; column?: string; value?: string | number };
+export type CleaningPreview = { changes: { operation: CleaningOperation; affected_rows: number; affected_cells: number; before_examples: string[]; after_examples: string[]; warnings: string[] }[]; affected_rows: number; affected_cells: number; resulting_rows: number; warnings: string[] };

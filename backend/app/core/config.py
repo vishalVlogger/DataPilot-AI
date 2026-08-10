@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     max_rows: int = 250_000
     max_columns: int = 500
     max_ai_sample_rows: int = 100
+    max_chart_rows: int = 100
+    max_category_analysis: int = 100
+    max_quality_examples: int = 5
     data_storage_dir: Path = Path(".data")
     cors_origins: str = "http://localhost:3000"
     openai_api_key: str | None = None

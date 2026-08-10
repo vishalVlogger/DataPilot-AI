@@ -18,6 +18,7 @@ class DatasetStorage:
         dataset_id = str(uuid4())
         folder = self.root / dataset_id
         folder.mkdir(parents=True)
+        frame.to_pickle(folder / "original.pkl")
         frame.to_pickle(folder / "data.pkl")
         metadata: dict[str, Any] = {
             "id": dataset_id,
@@ -29,6 +30,7 @@ class DatasetStorage:
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         (folder / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+        (folder / "audit.json").write_text("[]", encoding="utf-8")
         return metadata
 
     def load_frame(self, dataset_id: str) -> pd.DataFrame:
@@ -42,3 +44,39 @@ class DatasetStorage:
         if not path.is_file():
             raise DatasetNotFoundError()
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def save_working_frame(self, dataset_id: str, frame: pd.DataFrame) -> None:
+        folder = self.root / dataset_id
+        if not folder.is_dir():
+            raise DatasetNotFoundError()
+        frame.to_pickle(folder / "data.pkl")
+
+    def reset(self, dataset_id: str) -> pd.DataFrame:
+        path = self.root / dataset_id / "original.pkl"
+        if not path.is_file():
+            raise DatasetNotFoundError()
+        frame = pd.read_pickle(path)
+        self.save_working_frame(dataset_id, frame)
+        self._write_audit(dataset_id, [])
+        return frame
+
+    def load_original_frame(self, dataset_id: str) -> pd.DataFrame:
+        path = self.root / dataset_id / "original.pkl"
+        if not path.is_file():
+            raise DatasetNotFoundError()
+        return pd.read_pickle(path)
+
+    def load_audit(self, dataset_id: str) -> list[dict[str, Any]]:
+        path = self.root / dataset_id / "audit.json"
+        if not path.is_file():
+            raise DatasetNotFoundError()
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def append_audit(self, dataset_id: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        audit = self.load_audit(dataset_id)
+        audit.extend(entries)
+        self._write_audit(dataset_id, audit)
+        return audit
+
+    def _write_audit(self, dataset_id: str, audit: list[dict[str, Any]]) -> None:
+        (self.root / dataset_id / "audit.json").write_text(json.dumps(audit), encoding="utf-8")

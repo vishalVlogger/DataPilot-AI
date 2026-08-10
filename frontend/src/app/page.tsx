@@ -1,86 +1,47 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { askDataset, getProfile, inspectWorkbook, uploadDataset } from "@/services/api";
-import type { AskResponse, DatasetMetadata, DatasetProfile } from "@/types/dataset";
+import { DataChart } from "@/components/DataChart";
+import { applyCleaning, askDataset, createChart, downloadExport, getInsights, getProfile, getQuality, inspectWorkbook, previewCleaning, resetDataset, uploadDataset } from "@/services/api";
+import type { AskResponse, ChartResponse, ChartType, CleaningOperation, CleaningPreview, CleaningType, DatasetMetadata, DatasetProfile, Insight, QualityIssue } from "@/types/dataset";
 
 const format = (value: number) => new Intl.NumberFormat().format(value);
+const tabs = ["Overview", "Ask Data", "Insights", "Charts", "Data Quality", "Clean", "Export"] as const;
+type Tab = typeof tabs[number];
 
 export default function Home() {
-  const [file, setFile] = useState<File | null>(null);
-  const [sheets, setSheets] = useState<string[]>([]);
-  const [sheet, setSheet] = useState("");
-  const [dataset, setDataset] = useState<DatasetMetadata | null>(null);
-  const [profile, setProfile] = useState<DatasetProfile | null>(null);
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<AskResponse | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [file, setFile] = useState<File | null>(null), [sheets, setSheets] = useState<string[]>([]), [sheet, setSheet] = useState("");
+  const [dataset, setDataset] = useState<DatasetMetadata | null>(null), [profile, setProfile] = useState<DatasetProfile | null>(null);
+  const [active, setActive] = useState<Tab>("Overview"), [question, setQuestion] = useState(""), [answer, setAnswer] = useState<AskResponse | null>(null);
+  const [insights, setInsights] = useState<Insight[]>([]), [quality, setQuality] = useState<QualityIssue[]>([]);
+  const [chartQuestion, setChartQuestion] = useState(""), [chartType, setChartType] = useState<ChartType>("bar"), [chart, setChart] = useState<ChartResponse | null>(null);
+  const [cleanType, setCleanType] = useState<CleaningType>("trim_whitespace"), [cleanColumn, setCleanColumn] = useState(""), [fillValue, setFillValue] = useState("");
+  const [cleanOperation, setCleanOperation] = useState<CleaningOperation | null>(null), [preview, setPreview] = useState<CleaningPreview | null>(null);
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
 
-  async function chooseFile(selected: File | null) {
-    setFile(selected); setSheets([]); setSheet(""); setError("");
-    if (selected && /\.xlsx?$/i.test(selected.name)) {
-      try { const found = await inspectWorkbook(selected); setSheets(found); setSheet(found[0] ?? ""); }
-      catch (reason) { setError(reason instanceof Error ? reason.message : "Could not inspect workbook"); }
-    }
-  }
+  async function chooseFile(selected: File | null) { setFile(selected); setSheets([]); setSheet(""); setError(""); if (selected && /\.xlsx?$/i.test(selected.name)) try { const found = await inspectWorkbook(selected); setSheets(found); setSheet(found[0] ?? ""); } catch (reason) { fail(reason); } }
+  function fail(reason: unknown) { setError(reason instanceof Error ? reason.message : "The request failed"); }
+  async function refreshSupporting(id: string) { const [foundInsights, foundQuality] = await Promise.all([getInsights(id), getQuality(id)]); setInsights(foundInsights); setQuality(foundQuality); }
+  async function upload(event: FormEvent) { event.preventDefault(); if (!file) return; setBusy(true); setError(""); try { const created = await uploadDataset(file, sheet || undefined); const foundProfile = await getProfile(created.id); setDataset(created); setProfile(foundProfile); setCleanColumn(foundProfile.categorical_columns[0] ?? foundProfile.numeric_columns[0] ?? foundProfile.columns[0]?.name ?? ""); await refreshSupporting(created.id); } catch (reason) { fail(reason); } finally { setBusy(false); } }
+  async function ask(event: FormEvent) { event.preventDefault(); if (!dataset || !question.trim()) return; setBusy(true); setError(""); try { setAnswer(await askDataset(dataset.id, question)); } catch (reason) { fail(reason); } finally { setBusy(false); } }
+  async function chartSubmit(event: FormEvent) { event.preventDefault(); if (!dataset || !chartQuestion.trim()) return; setBusy(true); setError(""); try { setChart(await createChart(dataset.id, chartQuestion, chartType)); } catch (reason) { fail(reason); } finally { setBusy(false); } }
+  function operation(): CleaningOperation { const noColumn = ["remove_duplicates", "remove_missing_rows"].includes(cleanType); return { type: cleanType, ...(noColumn ? {} : { column: cleanColumn }), ...(cleanType === "fill_missing_value" ? { value: fillValue } : {}) }; }
+  async function previewClean() { if (!dataset) return; setBusy(true); setError(""); try { const selected = operation(); setCleanOperation(selected); setPreview(await previewCleaning(dataset.id, [selected])); } catch (reason) { fail(reason); } finally { setBusy(false); } }
+  async function confirmClean() { if (!dataset || !cleanOperation) return; setBusy(true); try { const result = await applyCleaning(dataset.id, [cleanOperation]); setProfile(result.profile); setPreview(null); setCleanOperation(null); await refreshSupporting(dataset.id); } catch (reason) { fail(reason); } finally { setBusy(false); } }
+  async function reset() { if (!dataset) return; setBusy(true); try { setProfile(await resetDataset(dataset.id)); await refreshSupporting(dataset.id); setPreview(null); } catch (reason) { fail(reason); } finally { setBusy(false); } }
 
-  async function upload(event: FormEvent) {
-    event.preventDefault(); if (!file) return;
-    setBusy(true); setError(""); setAnswer(null);
-    try { const created = await uploadDataset(file, sheet || undefined); setDataset(created); setProfile(await getProfile(created.id)); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Upload failed"); }
-    finally { setBusy(false); }
-  }
-
-  async function ask(event: FormEvent) {
-    event.preventDefault(); if (!dataset || !question.trim()) return;
-    setBusy(true); setError("");
-    try { setAnswer(await askDataset(dataset.id, question)); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Analysis failed"); }
-    finally { setBusy(false); }
-  }
-
-  return <main>
-    <aside>
-      <div className="brand"><span>DP</span><div>DataPilot <b>AI</b></div></div>
-      <nav>{["Dashboard", "Upload Data", "Dataset", "Ask AI", "Insights", "Charts", "Data Quality"].map((item, i) => <a className={i === (dataset ? 2 : 1) ? "active" : ""} key={item}>{item}</a>)}</nav>
-      <div className="status"><i /> Local AI mode<br/><small>No API key required</small></div>
-    </aside>
-    <section className="content">
-      <header><div><p className="eyebrow">WORKSPACE</p><h1>{dataset ? dataset.name : "Upload your data"}</h1><p>{dataset ? "Your dataset is ready to explore." : "Turn spreadsheets into clear, calculated answers."}</p></div><div className="avatar">DA</div></header>
-
-      {!dataset && <div className="upload-card">
-        <div className="upload-copy"><span className="icon">↥</span><h2>Bring your data aboard</h2><p>Upload a CSV or Excel workbook. Your file stays in local development storage.</p></div>
-        <form onSubmit={upload}>
-          <label className="dropzone"><input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => chooseFile(e.target.files?.[0] ?? null)} /><b>{file ? file.name : "Choose a file or drop it here"}</b><span>CSV, XLSX or XLS · up to 25 MB</span></label>
-          {sheets.length > 0 && <label className="field">Worksheet<select value={sheet} onChange={(e) => setSheet(e.target.value)}>{sheets.map((name) => <option key={name}>{name}</option>)}</select></label>}
-          <button disabled={!file || busy}>{busy ? "Analyzing…" : "Upload & analyze"}</button>
-        </form>
-      </div>}
-
-      {error && <div className="error">{error}</div>}
-
-      {dataset && profile && <>
-        <div className="metrics">
-          <article><span>Rows</span><strong>{format(profile.row_count)}</strong><small>records analyzed</small></article>
-          <article><span>Columns</span><strong>{profile.column_count}</strong><small>{profile.numeric_columns.length} numeric</small></article>
-          <article><span>Missing</span><strong>{format(profile.missing_values)}</strong><small>empty cells</small></article>
-          <article><span>Duplicates</span><strong>{format(profile.duplicate_rows)}</strong><small>matching rows</small></article>
-        </div>
-
-        <div className="grid">
-          <article className="panel profile"><div className="panel-title"><div><p className="eyebrow">DATASET PROFILE</p><h2>Columns at a glance</h2></div><button className="secondary" onClick={() => { setDataset(null); setProfile(null); setFile(null); }}>New upload</button></div>
-            <div className="table-wrap"><table><thead><tr><th>Column</th><th>Type</th><th>Unique</th><th>Missing</th><th>Summary</th></tr></thead><tbody>{profile.columns.map((column) => <tr key={column.name}><td><b>{column.name}</b></td><td><em className={`pill ${column.category}`}>{column.category}</em></td><td>{format(column.unique_count)}</td><td>{column.missing_percentage}%</td><td>{column.category === "numeric" ? `Σ ${column.sum?.toLocaleString() ?? "—"}` : column.minimum ? `${String(column.minimum).slice(0, 10)} → ${String(column.maximum).slice(0, 10)}` : "—"}</td></tr>)}</tbody></table></div>
-          </article>
-
-          <article className="panel ask"><p className="eyebrow">ASK YOUR DATA</p><h2>What would you like to know?</h2><p>Answers are calculated from your uploaded dataset.</p>
-            <form onSubmit={ask}><textarea value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={`Try “What is the total ${profile.numeric_columns[0] ?? "revenue"}?”`} /><button disabled={busy || !question.trim()}>{busy ? "Calculating…" : "Ask DataPilot"}</button></form>
-            <div className="suggestions">{profile.numeric_columns.slice(0, 1).map((name) => ["total", "average", "maximum"].map((op) => <button key={op} onClick={() => setQuestion(`What is the ${op} ${name}?`)}>{op} {name}</button>))}</div>
-            {answer && <div className="answer"><span>CALCULATED ANSWER</span><h3>{answer.answer}</h3>{Array.isArray(answer.result) && <div className="result-list">{answer.result.map((row, index) => <pre key={index}>{JSON.stringify(row)}</pre>)}</div>}</div>}
-          </article>
-        </div>
-      </>}
-    </section>
-  </main>;
+  return <main><aside><div className="brand"><span>DP</span><div>DataPilot <b>AI</b></div></div><nav>{["Dashboard", "Upload Data", ...tabs].map((item) => <a className={item === active ? "active" : ""} key={item}>{item}</a>)}</nav><div className="status"><i/> Local AI mode<br/><small>No API key required</small></div></aside>
+    <section className="content"><header><div><p className="eyebrow">WORKSPACE</p><h1>{dataset ? dataset.name : "Upload your data"}</h1><p>{dataset ? "Explore, clean, visualize, and export calculated results." : "Turn spreadsheets into clear, calculated answers."}</p></div><div className="avatar">DA</div></header>
+    {!dataset && <div className="upload-card"><div className="upload-copy"><span className="icon">↥</span><h2>Bring your data aboard</h2><p>Upload a CSV or Excel workbook. Your file stays in local development storage.</p></div><form onSubmit={upload}><label className="dropzone"><input type="file" accept=".csv,.xlsx,.xls" onChange={(event) => chooseFile(event.target.files?.[0] ?? null)}/><b>{file ? file.name : "Choose a file or drop it here"}</b><span>CSV, XLSX or XLS · up to 25 MB</span></label>{sheets.length > 0 && <label className="field">Worksheet<select value={sheet} onChange={(event) => setSheet(event.target.value)}>{sheets.map((name) => <option key={name}>{name}</option>)}</select></label>}<button disabled={!file || busy}>{busy ? "Analyzing…" : "Upload & analyze"}</button></form></div>}
+    {error && <div className="error">{error}<button onClick={() => setError("")}>×</button></div>}
+    {dataset && profile && <><div className="metrics"><article><span>Rows</span><strong>{format(profile.row_count)}</strong><small>working records</small></article><article><span>Columns</span><strong>{profile.column_count}</strong><small>{profile.numeric_columns.length} numeric</small></article><article><span>Missing</span><strong>{format(profile.missing_values)}</strong><small>empty cells</small></article><article><span>Duplicates</span><strong>{format(profile.duplicate_rows)}</strong><small>matching rows</small></article></div>
+      <div className="tabs">{tabs.map((tab) => <button className={active === tab ? "selected" : ""} onClick={() => setActive(tab)} key={tab}>{tab}</button>)}</div>
+      {active === "Overview" && <article className="panel"><div className="panel-title"><div><p className="eyebrow">DATASET PROFILE</p><h2>Columns at a glance</h2></div><button className="secondary" onClick={() => { setDataset(null); setProfile(null); setFile(null); }}>New upload</button></div><div className="table-wrap"><table><thead><tr><th>Column</th><th>Type</th><th>Unique</th><th>Missing</th><th>Summary</th></tr></thead><tbody>{profile.columns.map((column) => <tr key={column.name}><td><b>{column.name}</b></td><td><em className={`pill ${column.category}`}>{column.category}</em></td><td>{format(column.unique_count)}</td><td>{column.missing_percentage}%</td><td>{column.category === "numeric" ? `Σ ${column.sum?.toLocaleString() ?? "—"}` : column.minimum ? `${String(column.minimum).slice(0,10)} → ${String(column.maximum).slice(0,10)}` : "—"}</td></tr>)}</tbody></table></div></article>}
+      {active === "Ask Data" && <article className="panel workspace-panel"><p className="eyebrow">ASK YOUR DATA</p><h2>What would you like to know?</h2><p>Plans are interpreted locally; calculations always run against your dataset.</p><form className="action-form" onSubmit={ask}><textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Try “Show monthly sales trend” or “Count unique customers”"/><button disabled={busy || !question.trim()}>Ask DataPilot</button></form>{answer && <div className="answer"><span>CALCULATED ANSWER</span><h3>{answer.answer}</h3><details><summary>View analysis plan and result</summary><pre>{JSON.stringify({ plan: answer.plan, result: answer.result }, null, 2)}</pre></details>{answer.chart_suggestion && <button className="secondary" onClick={() => { setChartQuestion(question); setChartType(answer.chart_suggestion!.type); setActive("Charts"); }}>Create suggested chart</button>}</div>}</article>}
+      {active === "Insights" && <section><div className="section-heading"><div><p className="eyebrow">AUTOMATIC INSIGHTS</p><h2>Findings calculated from your data</h2></div></div><div className="card-grid">{insights.map((item, index) => <article className={`insight-card ${item.severity}`} key={`${item.title}-${index}`}><span>{item.type.replaceAll("_", " ")}</span><h3>{item.title}</h3><p>{item.description}</p>{item.value !== null && item.value !== undefined && <strong>{typeof item.value === "number" ? item.value.toLocaleString() : item.value}</strong>}</article>)}{!insights.length && <div className="empty-state">No notable insights were detected.</div>}</div></section>}
+      {active === "Charts" && <article className="panel workspace-panel"><p className="eyebrow">CHART BUILDER</p><h2>Visualize calculated results</h2><form className="chart-form" onSubmit={chartSubmit}><input value={chartQuestion} onChange={(event) => setChartQuestion(event.target.value)} placeholder="Show sales by region"/><select value={chartType} onChange={(event) => setChartType(event.target.value as ChartType)}>{["bar","column","line","pie","scatter"].map((type) => <option key={type}>{type}</option>)}</select><button disabled={busy || !chartQuestion.trim()}>Generate chart</button></form>{chart && <><div className="chart-heading"><div><h3>{chart.title}</h3><p>Interpreted: {chart.interpreted_request}</p></div><em>{chart.type}</em></div><DataChart chart={chart}/><details><summary>View underlying chart data</summary><pre>{JSON.stringify(chart.data, null, 2)}</pre></details></>}</article>}
+      {active === "Data Quality" && <section><p className="eyebrow">DATA QUALITY</p><h2>Issues worth reviewing</h2><div className="quality-list">{quality.map((item, index) => <article className="quality-item" key={`${item.issue_type}-${item.column}-${index}`}><span className={`severity ${item.severity}`}/><div><h3>{item.issue_type.replaceAll("_", " ")}</h3><p>{item.column ? `${item.column} · ` : ""}{item.count.toLocaleString()} affected</p>{item.examples.length > 0 && <code>{item.examples.join(" · ")}</code>}</div></article>)}{!quality.length && <div className="empty-state success">No quality issues detected.</div>}</div></section>}
+      {active === "Clean" && <article className="panel workspace-panel"><p className="eyebrow">PREVIEW-FIRST CLEANING</p><h2>Clean the working dataset safely</h2><p>The original upload is preserved and can always be restored.</p><div className="clean-form"><label>Operation<select value={cleanType} onChange={(event) => { setCleanType(event.target.value as CleaningType); setPreview(null); }}>{["trim_whitespace","standardize_lowercase","standardize_uppercase","standardize_titlecase","remove_duplicates","remove_missing_rows","fill_missing_mean","fill_missing_median","fill_missing_value"].map((type) => <option key={type} value={type}>{type.replaceAll("_", " ")}</option>)}</select></label>{!["remove_duplicates","remove_missing_rows"].includes(cleanType) && <label>Column<select value={cleanColumn} onChange={(event) => setCleanColumn(event.target.value)}>{profile.columns.map((column) => <option key={column.name}>{column.name}</option>)}</select></label>}{cleanType === "fill_missing_value" && <label>Fill value<input value={fillValue} onChange={(event) => setFillValue(event.target.value)}/></label>}<button onClick={previewClean} disabled={busy}>Preview changes</button><button className="secondary" onClick={reset} disabled={busy}>Reset to original</button></div>{preview && <div className="clean-preview"><h3>Confirm these changes</h3><p><b>{preview.affected_rows.toLocaleString()}</b> rows and <b>{preview.affected_cells.toLocaleString()}</b> cells affected. Result: {preview.resulting_rows.toLocaleString()} rows.</p>{preview.changes.map((change, index) => <div key={index}><strong>{change.operation.type.replaceAll("_", " ")}</strong><small>Before: {change.before_examples.join(" · ") || "—"}<br/>After: {change.after_examples.join(" · ") || "—"}</small></div>)}<button className="danger" onClick={confirmClean} disabled={busy}>Confirm and apply</button><button className="secondary" onClick={() => setPreview(null)}>Cancel</button></div>}</article>}
+      {active === "Export" && <article className="panel workspace-panel"><p className="eyebrow">EXPORT</p><h2>Download your data</h2><p>Export the current cleaned version or the untouched original upload.</p><div className="export-grid">{(["current","original"] as const).map((version) => <div key={version}><h3>{version === "current" ? "Current working data" : "Original upload"}</h3><p>{version === "current" ? "Includes confirmed cleaning changes." : "Preserved exactly as initially parsed."}</p><button onClick={() => downloadExport(dataset.id,"csv",version)}>Export CSV</button><button className="secondary" onClick={() => downloadExport(dataset.id,"xlsx",version)}>Export Excel</button></div>)}</div></article>}
+    </>}</section></main>;
 }

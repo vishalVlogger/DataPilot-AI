@@ -1,8 +1,9 @@
+import calendar
 import re
 from typing import Any
 
 from app.core.errors import AppError
-from app.schemas.dataset import AnalysisPlan
+from app.schemas.dataset import AnalysisPlan, FilterCondition
 from app.services.ai.base import AIProvider
 
 
@@ -10,10 +11,18 @@ def _normalized(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
-def _find_column(question: str, names: list[str], numeric_only: set[str] | None = None) -> str | None:
-    normalized_question = f" {_normalized(question)} "
-    candidates = [name for name in names if numeric_only is None or name in numeric_only]
-    matches = [name for name in candidates if f" {_normalized(name)} " in normalized_question]
+def _singular(text: str) -> str:
+    return text[:-1] if text.endswith("s") and len(text) > 3 else text
+
+
+def _find_column(question: str, names: list[str], allowed: set[str] | None = None) -> str | None:
+    words = {_singular(word) for word in _normalized(question).split()}
+    candidates = [name for name in names if allowed is None or name in allowed]
+    matches = []
+    for name in candidates:
+        tokens = {_singular(word) for word in _normalized(name).split()}
+        if tokens and tokens.issubset(words):
+            matches.append(name)
     return max(matches, key=len) if matches else None
 
 
@@ -21,40 +30,108 @@ class MockAIProvider(AIProvider):
     async def create_analysis_plan(self, question: str, columns: list[dict[str, Any]]) -> AnalysisPlan:
         names = [item["name"] for item in columns]
         numeric = {item["name"] for item in columns if item["category"] == "numeric"}
+        dates = {item["name"] for item in columns if item["category"] == "date"}
+        categorical = {item["name"] for item in columns if item["category"] in {"categorical", "boolean"}}
+        default_metric = next((name for name in names if name in numeric), None)
+        default_date = next((name for name in names if name in dates), None)
         q = _normalized(question)
+        metric = _find_column(question, names, numeric)
+        date_column = _find_column(question, names, dates) or default_date
+        group = _find_column(question, names, categorical)
+        if not group:
+            question_folded = q.casefold()
+            group = next((item["name"] for item in columns if item["name"] in categorical and any(_normalized(str(value)) in question_folded for value in item.get("sample_values", []) if str(value).strip())), None)
+        aggregation = "mean" if re.search(r"\b(average|mean)\b", q) else "median" if "median" in q else "min" if re.search(r"\b(minimum|min)\b", q) else "max" if re.search(r"\b(maximum|max)\b", q) else "sum"
+
         if re.search(r"\b(how many rows|row count|count rows|number of rows)\b", q):
             return AnalysisPlan(operation="count", aggregation="count")
+        if re.search(r"\b(unique|distinct)\b", q):
+            column = _find_column(question, names)
+            if not column:
+                raise AppError("Please name the column to count uniquely.", "AMBIGUOUS_QUESTION")
+            return AnalysisPlan(operation="distinct_count", metric=column, aggregation="count")
+        if re.search(r"\b(this|current) (month|quarter|year)\b", q) and re.search(r"\b(previous|last) (month|quarter|year)\b", q):
+            mode = next(item for item in ("month", "quarter", "year") if item in q)
+            return AnalysisPlan(operation="compare_periods", metric=metric or default_metric, aggregation=aggregation, date_column=date_column, period_mode=mode)
+        if re.search(r"\b(monthly|weekly|daily|quarterly|yearly|trend|by month|by week|by quarter|by year|which month|what month)\b", q):
+            granularities = {"daily": "day", "weekly": "week", "monthly": "month", "quarterly": "quarter", "yearly": "year"}
+            granularity = next((value for word, value in granularities.items() if word in q), None)
+            if not granularity:
+                granularity = next((item for item in ("month", "week", "quarter", "year", "day") if f"by {item}" in q), "month")
+            return AnalysisPlan(operation="trend", metric=metric or default_metric, aggregation=aggregation, date_column=date_column, time_granularity=granularity, limit=100)
+
+        if re.search(r"\b(declined|decreased|grew|increased)\b", q) and group and date_column:
+            return AnalysisPlan(operation="compare_periods", metric=metric or default_metric, aggregation="sum", group_by=[group], date_column=date_column, period_mode="month", sort="asc" if re.search(r"\b(declined|decreased)\b", q) else "desc", limit=1)
+
+        scatter_match = re.search(r"(?:plot|scatter|show)\s+(.+?)\s+(?:vs|versus|against)\s+(.+?)(?:\s+chart)?$", question, re.I)
+        if scatter_match:
+            x_column = _find_column(scatter_match.group(1), names, numeric)
+            y_column = _find_column(scatter_match.group(2), names, numeric)
+            if x_column and y_column:
+                return AnalysisPlan(operation="filter", metric=y_column, group_by=[x_column], limit=100)
+
         limit_match = re.search(r"\b(?:top|bottom)\s+(\d+)\b", q)
         if "top" in q or "bottom" in q:
-            metric = _find_column(question, names, numeric)
-            group = _find_column(question, names)
-            if group == metric:
-                group = None
-            if not metric:
-                metric = next(iter(numeric), None)
-            non_numeric = [name for name in names if name not in numeric and name.lower() in q]
-            group = max(non_numeric, key=len) if non_numeric else group
             if not group:
                 raise AppError("Please name the category to group by, such as product or region.", "AMBIGUOUS_QUESTION")
-            return AnalysisPlan(operation="top_n" if "top" in q else "bottom_n", metric=metric, group_by=group, aggregation="sum", limit=int(limit_match.group(1)) if limit_match else 10)
-        operations = [("average", "mean"), ("mean", "mean"), ("minimum", "min"), ("lowest", "min"), ("maximum", "max"), ("highest", "max"), ("total", "sum"), ("sum", "sum")]
-        aggregation = next((value for keyword, value in operations if keyword in q), None)
-        if aggregation:
-            metric = _find_column(question, names, numeric)
+            return AnalysisPlan(operation="top_n" if "top" in q else "bottom_n", metric=metric or default_metric, group_by=[group], aggregation=aggregation, sort="desc" if "top" in q else "asc", limit=int(limit_match.group(1)) if limit_match else 10)
+        if "compare" in q and group:
+            text = re.search(r"compare\s+(.+?)\s+(?:and|with|vs)\s+(.+?)(?:\s+(?:sales|revenue|profit|by)|$)", question, re.I)
+            values = [text.group(1).strip(), text.group(2).strip()] if text else []
+            return AnalysisPlan(operation="compare_groups", metric=metric or default_metric, group_by=[group], aggregation=aggregation, compare_values=values, limit=20)
+
+        comparison = re.search(r"\b(?:where|with)\s+(.+?)\s+(?:is\s+)?(above|greater than|at least|below|less than|at most|equals?)\s+([\d,.]+)", question, re.I)
+        if comparison:
+            filter_column = _find_column(comparison.group(1), names) or metric
+            operators = {"above": "greater_than", "greater than": "greater_than", "at least": "greater_than_or_equal", "below": "less_than", "less than": "less_than", "at most": "less_than_or_equal", "equal": "equals", "equals": "equals"}
+            condition = FilterCondition(column=filter_column or "", operator=operators[comparison.group(2).lower()], value=float(comparison.group(3).replace(",", "")))
+            return AnalysisPlan(operation="filter", filters=[condition], limit=100)
+
+        month = next((name for name in calendar.month_name[1:] if name.lower() in q), None)
+        if month and metric and date_column:
+            return AnalysisPlan(operation="aggregate", metric=metric, aggregation=aggregation, filters=[FilterCondition(column=date_column, operator="contains", value=month)])
+
+        if group and (" by " in f" {q} " or aggregation == "mean"):
+            return AnalysisPlan(operation="group_and_aggregate", metric=metric or default_metric, group_by=[group], aggregation=aggregation, sort="desc", limit=100)
+
+        operations = [("average", "mean"), ("mean", "mean"), ("median", "median"), ("minimum", "min"), ("lowest", "min"), ("maximum", "max"), ("highest", "max"), ("total", "sum"), ("sum", "sum")]
+        selected_aggregation = next((value for keyword, value in operations if keyword in q), None)
+        if selected_aggregation:
             if not metric:
                 raise AppError("Please include the numeric column you want to analyze.", "AMBIGUOUS_QUESTION")
-            return AnalysisPlan(operation="aggregate", metric=metric, aggregation=aggregation)
+            return AnalysisPlan(operation="aggregate", metric=metric, aggregation=selected_aggregation)
         if re.search(r"\b(count|how many)\b", q):
             return AnalysisPlan(operation="count", aggregation="count")
-        raise AppError("This milestone supports total, average, min, max, count, top N, and bottom N questions.", "UNSUPPORTED_QUESTION")
+        raise AppError("Supported questions include aggregation, grouping, filters, distinct counts, rankings, trends, and period comparisons.", "UNSUPPORTED_QUESTION")
 
     async def explain_result(self, question: str, plan: AnalysisPlan, result: Any) -> str:
         if plan.operation == "count":
-            return f"The dataset contains {result['count']:,} rows."
+            return f"The filtered dataset contains {result['count']:,} rows."
+        if plan.operation == "distinct_count":
+            return f"{result['column']} contains {result['distinct_count']:,} distinct values."
         if plan.operation == "aggregate":
-            labels = {"sum": "total", "mean": "average", "min": "minimum", "max": "maximum", "count": "count"}
+            labels = {"sum": "total", "mean": "average", "median": "median", "min": "minimum", "max": "maximum", "count": "count"}
             value = result["value"]
-            rendered = f"{value:,.2f}" if isinstance(value, float) else f"{value:,}" if isinstance(value, int) else str(value)
+            rendered = f"{value:,.2f}" if isinstance(value, (float, int)) else str(value)
             return f"The {labels.get(plan.aggregation, plan.aggregation)} {plan.metric} is {rendered}."
-        direction = "top" if plan.operation == "top_n" else "bottom"
-        return f"Here are the {direction} {len(result)} {plan.group_by} values ranked by total {plan.metric}."
+        if plan.operation == "compare_periods":
+            if isinstance(result, list):
+                if not result:
+                    return "No comparable groups were found across the latest two periods."
+                row = result[0]
+                group = plan.group_by[0]
+                direction = "declined" if row["change"] < 0 else "grew"
+                return f"{row[group]} {direction} the most, changing by {abs(row['change_percentage'] or 0):.2f}% across the latest two periods."
+            direction = "increased" if result["change"] >= 0 else "decreased"
+            percent = "not defined because the previous value was zero" if result["change_percentage"] is None else f"{abs(result['change_percentage']):.2f}%"
+            return f"{plan.metric} {direction} by {percent}, from {result['previous_value']:,.2f} to {result['current_value']:,.2f}."
+        if plan.operation == "filter":
+            return f"{len(result):,} matching rows are shown."
+        if plan.operation == "trend":
+            if result and re.search(r"\b(highest|strongest|best)\b", question, re.I):
+                strongest = max(result, key=lambda row: row[plan.metric])
+                return f"{strongest['Period']} had the highest {plan.metric} at {strongest[plan.metric]:,.2f}."
+            return f"Calculated {len(result):,} {plan.time_granularity} periods for {plan.metric}."
+        direction = "top" if plan.operation == "top_n" else "bottom" if plan.operation == "bottom_n" else "grouped"
+        group = ", ".join(plan.group_by)
+        return f"Here are {len(result):,} {direction} {group} results calculated from {plan.metric}."

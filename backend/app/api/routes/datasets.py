@@ -21,7 +21,7 @@ from app.services.analytics.executor import validate_plan
 from app.services.analytics.engines import ExecutionEngineSelector
 from app.services.analytics.insights import generate_insights
 from app.services.analytics.profiler import profile_dataset
-from app.services.analytics.semantics import recommend_chart_type, validate_semantic_plan
+from app.services.analytics.semantics import describe_chart_plan, recommend_chart_type, validate_semantic_plan
 from app.services.analytics.quality import analyze_quality
 from app.services.cleaning.service import audit_entries, clean_frame
 from app.services.datasets.parser import inspect_sheets, parse_dataset
@@ -168,7 +168,7 @@ async def ask_dataset(dataset_id: str, request: AskRequest) -> AskResponse:
     suggestion = ChartSuggestion(type=recommend_chart_type(profile["columns"], plan)) if isinstance(result, list) and result else None
     explanation = {"metric": plan.metric, "aggregation": plan.aggregation, "grouped_by": plan.group_by, "filters": [item.model_dump() for item in plan.filters], "date_filter": plan.date_filter.model_dump() if plan.date_filter else None}
     session_id, run_id = _record_run(dataset_id, request.session_id, version, request.question, plan, result, engine_result.engine, engine_result.duration_ms, answer)
-    metadata = {"execution_engine": engine_result.engine, "dataset_version": version, "load_ms": load_ms, "execution_ms": engine_result.duration_ms, "ai_interpretation_ms": interpretation_ms, "provider_fallback": fallback_used, "cached": cached is not None, "session_id": session_id, "run_id": run_id}
+    metadata = {"execution_engine": engine_result.engine, "dataset_version": version, "load_ms": load_ms, "execution_ms": engine_result.duration_ms, "ai_interpretation_ms": interpretation_ms, "provider_fallback": fallback_used, "cached": cached is not None, "session_id": session_id, "run_id": run_id, "interpreted_as": describe_chart_plan(plan, request.question)["interpreted_as"]}
     logger.info("analysis_complete", extra={"dataset_id": dataset_id, **metadata})
     usage.record("ai_request", 1, principal.user_id, dataset_id)
     usage.record("ask_data", 1, principal.user_id, dataset_id)
@@ -208,8 +208,7 @@ async def create_chart(dataset_id: str, request: ChartRequest) -> ChartResponse:
             plan = await MockAIProvider().create_analysis_plan(request.question or "", profile["columns"])
     if request.drill_down:
         plan = plan.model_copy(update={"filters": [*plan.filters, request.drill_down]})
-    result = generate_chart(frame, plan, request.chart_type, settings.max_chart_rows, request.title, request.x_axis_label, request.y_axis_label, request.show_legend)
-    result["interpreted_request"] = request.question or result["interpreted_request"]
+    result = generate_chart(frame, plan, request.chart_type, settings.max_chart_rows, request.title, request.x_axis_label, request.y_axis_label, request.show_legend, request.question)
     return ChartResponse.model_validate(result)
 
 

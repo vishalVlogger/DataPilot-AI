@@ -5,7 +5,7 @@ from typing import Any
 from app.core.errors import AppError
 from app.schemas.dataset import AnalysisPlan, DateFilter, FilterCondition, PipelineStep, SortRule
 from app.services.ai.base import AIProvider
-from app.services.analytics.semantics import aggregation_allowed
+from app.services.analytics.semantics import aggregation_allowed, ranking_defaults
 
 
 def _normalized(text: str) -> str:
@@ -48,7 +48,7 @@ class MockAIProvider(AIProvider):
         if metric_profile and not aggregation_allowed(metric_profile, aggregation):
             raise AppError(f"{aggregation} is not meaningful for {metric}.", "SEMANTIC_AGGREGATION_INVALID")
 
-        if group and re.search(r"\b(most common|least common|distribution|frequency|how many (?:per|by|for each))\b", q):
+        if group and not re.search(r"\b(top|bottom|best|highest)\b", q) and re.search(r"\b(most common|least common|distribution|frequency|how many (?:per|by|for each))\b", q):
             return AnalysisPlan(operation="group_and_aggregate", metric=group, aggregation="count", group_by=[group], sort="asc" if "least common" in q else "desc", limit=100)
 
         temporal_group = next((item for item in columns if item["name"] == group and item.get("semantic_role") == "temporal_dimension" and item.get("physical_type") in {"integer", "number"}), None)
@@ -145,11 +145,18 @@ class MockAIProvider(AIProvider):
             if x_column and y_column:
                 return AnalysisPlan(operation="filter", metric=y_column, group_by=[x_column], limit=100)
 
-        limit_match = re.search(r"\b(?:top|bottom)\s+(\d+)\b", q)
-        if "top" in q or "bottom" in q:
+        limit_match = re.search(r"\b(?:top|bottom|best|highest)\s+(\d+)\b", q)
+        ranking_intent = bool(re.search(r"\b(top|bottom|best[ -]selling|best\s+\d+|most expensive|most profitable|cheapest|highest\s+\d+)\b", q))
+        if ranking_intent:
+            if not group:
+                group = next((item["name"] for item in columns if item.get("semantic_role") == "high_cardinality_dimension" and _normalized(item["name"]) in {"name", "title", "product name"}), None)
             if not group:
                 raise AppError("Please name the category to group by, such as product or region.", "AMBIGUOUS_QUESTION")
-            return AnalysisPlan(operation="top_n" if "top" in q else "bottom_n", metric=metric or default_metric, group_by=[group], aggregation=aggregation, sort="desc" if "top" in q else "asc", limit=int(limit_match.group(1)) if limit_match else 10)
+            if re.search(r"\bby\b", q) and not metric and not re.search(r"\b(price|sales|revenue|units|profit|margin|cost|amount)\b", q):
+                raise AppError("The ranking metric named after 'by' was not found in this dataset.", "COLUMN_NOT_FOUND")
+            ranking_metric, ranking_aggregation, _ = ranking_defaults(question, columns, group, metric)
+            bottom = "bottom" in q or "cheapest" in q
+            return AnalysisPlan(operation="bottom_n" if bottom else "top_n", metric=ranking_metric, group_by=[group], aggregation=ranking_aggregation, sort="asc" if bottom else "desc", limit=int(limit_match.group(1)) if limit_match else 10)
         if "compare" in q and group:
             text = re.search(r"compare\s+(.+?)\s+(?:and|with|vs)\s+(.+?)(?:\s+(?:sales|revenue|profit|by)|$)", question, re.I)
             values = [text.group(1).strip(), text.group(2).strip()] if text else []

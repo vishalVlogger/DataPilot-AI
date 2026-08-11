@@ -1,5 +1,5 @@
-import re
 import calendar
+import re
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -45,10 +45,67 @@ ID_SUFFIXES = ("_id", " id", "_number", " number", "_no", " no", "_code")
 BOOLEAN_NAMES = {"active", "enabled", "disabled", "flag", "is_active", "is_deleted", "success", "valid"}
 SUM_LIKE = {"sales", "revenue", "amount", "profit", "quantity", "qty", "cost", "units", "volume", "total"}
 AVERAGE_LIKE = {"price", "rate", "ratio", "percentage", "percent", "margin", "score", "age", "distance", "mileage", "km", "temperature"}
+RANKING_MEASURE_HINTS: list[tuple[set[str], set[str], str]] = [
+    ({"most", "expensive"}, {"price", "cost", "amount"}, "max"),
+    ({"cheapest"}, {"price", "cost", "amount"}, "min"),
+    ({"most", "profitable"}, {"profit", "margin"}, "sum"),
+    ({"best", "selling"}, {"sales", "revenue", "units", "sold", "volume"}, "sum"),
+]
 
 
 def _normalized(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.casefold()).strip("_")
+
+
+def natural_label(name: str) -> str:
+    """Convert a schema identifier to a stable, presentation-only label."""
+    return _normalized(name).replace("_", " ").capitalize()
+
+
+def _measure_matching(columns: list[dict[str, Any]], hints: set[str]) -> str | None:
+    measures = [item for item in columns if item.get("semantic_role") == "measure"]
+    scored = [
+        (len(set(_normalized(item["name"]).split("_")) & hints), -index, item["name"])
+        for index, item in enumerate(measures)
+    ]
+    best = max(scored, default=(0, 0, None))
+    return best[2] if best[0] else None
+
+
+def ranking_defaults(question: str, columns: list[dict[str, Any]], dimension: str, explicit_metric: str | None) -> tuple[str, str, bool]:
+    """Resolve a ranking metric without falling back to the first numeric column."""
+    words = set(_normalized(question).split("_"))
+    if {"most", "common"} <= words:
+        return dimension, "count", False
+    for intent_words, hints, aggregation in RANKING_MEASURE_HINTS:
+        if intent_words <= words:
+            metric = _measure_matching(columns, hints)
+            if metric:
+                return metric, aggregation, False
+    if explicit_metric:
+        if {"average", "mean"} & words: aggregation = "mean"
+        elif {"maximum", "max"} & words: aggregation = "max"
+        elif {"minimum", "min"} & words: aggregation = "min"
+        else:
+            item = next(column for column in columns if column["name"] == explicit_metric)
+            aggregation = preferred_automatic_aggregation(item)
+        return explicit_metric, aggregation, False
+    if "price" in words:
+        metric = _measure_matching(columns, {"price", "cost", "amount"})
+        if metric:
+            return metric, "mean", True
+    if "sales" in words or "selling" in words:
+        metric = _measure_matching(columns, {"sales", "revenue", "units", "sold", "volume"})
+        if metric:
+            return metric, "sum", True
+    measures = [item for item in columns if item.get("semantic_role") == "measure"]
+    for hints, aggregation in [({"price", "cost"}, "mean"), ({"sales", "revenue", "units", "volume"}, "sum"), ({"profit", "margin"}, "sum")]:
+        metric = _measure_matching(columns, hints)
+        if metric:
+            return metric, aggregation, True
+    if len(measures) == 1:
+        return measures[0]["name"], preferred_automatic_aggregation(measures[0]), True
+    raise AppError(f"Ranked {natural_label(dimension).casefold()} by what metric?", "AMBIGUOUS_QUESTION")
 
 
 def _physical_type(series: pd.Series) -> str:
@@ -189,3 +246,53 @@ def recommend_chart_type(columns: list[dict[str, Any]], plan: Any) -> str:
     if plan.operation == "trend" or group_role == "temporal_dimension": return "line"
     if plan.operation == "filter" and metric_role == "measure" and plan.group_by and group_role == "measure": return "scatter"
     return "bar"
+
+
+def describe_chart_plan(plan: Any, question: str | None = None, limit: int | None = None) -> dict[str, Any]:
+    """Build user-facing chart semantics without changing schema identifiers."""
+    dimension = plan.group_by[0] if plan.group_by else ("Period" if plan.operation == "trend" else None)
+    aggregation = plan.aggregation or ("count" if plan.operation == "count" else "sum")
+    aggregation_labels = {"mean": "Average", "max": "Maximum", "min": "Minimum", "sum": "Total", "median": "Median", "count": "Row count"}
+    metric_label = natural_label(plan.metric) if plan.metric else "Value"
+    value_label = "Row count" if aggregation == "count" else f"{aggregation_labels.get(aggregation, natural_label(aggregation))} {metric_label.casefold()}"
+    effective_limit = limit or plan.limit
+    dimension_label = natural_label(dimension or "category")
+    if question and dimension:
+        question_words = _normalized(question).replace("_", " ")
+        dimension_words = _normalized(dimension).replace("_", " ")
+        contextual = re.search(rf"\b([a-z0-9]+\s+{re.escape(dimension_words)}s?)\b", question_words)
+        if contextual and contextual.group(1).split()[0] not in {"top", "bottom", "the", "by"}:
+            dimension_label = contextual.group(1).capitalize()
+        elif dimension_words == "name":
+            ranked_entity = re.search(r"\b(?:top|bottom)\s+\d+\s+(?:most\s+[a-z0-9]+\s+)?([a-z0-9]+)", question_words)
+            if ranked_entity:
+                entity = ranked_entity.group(1).removesuffix("s")
+                dimension_label = f"{entity.capitalize()} name"
+    if plan.operation == "filter" and dimension and plan.metric:
+        interpreted_as = f"{natural_label(plan.metric)} vs {dimension_label.casefold()}"
+        aggregation = None
+        value_label = natural_label(plan.metric)
+    elif plan.operation in {"top_n", "bottom_n"}:
+        direction = "Top" if plan.operation == "top_n" else "Bottom"
+        plural = dimension_label if dimension_label.endswith("s") else f"{dimension_label}s"
+        interpreted_as = f"{direction} {effective_limit} most common {plural.casefold()}" if aggregation == "count" else f"{direction} {effective_limit} {plural.casefold()} by {value_label.casefold()}"
+    elif dimension:
+        interpreted_as = f"{value_label} by {natural_label(dimension).casefold()}"
+    else:
+        interpreted_as = value_label
+    normalized_question = _normalized(question or "")
+    metric_mentioned = bool(plan.metric and _normalized(plan.metric).replace("_", " ") in normalized_question.replace("_", " "))
+    explicit_intent = any(phrase in normalized_question for phrase in ("most_expensive", "most_common", "best_selling", "most_profitable", "cheapest"))
+    inferred = plan.operation in {"top_n", "bottom_n"} and not metric_mentioned and not explicit_intent
+    return {
+        "interpreted_as": interpreted_as,
+        "dimension": dimension,
+        "metric": "row_count" if aggregation == "count" else plan.metric,
+        "aggregation": "average" if aggregation == "mean" else aggregation,
+        "sort": "ascending" if plan.operation == "bottom_n" or plan.sort == "asc" else "descending" if plan.operation == "top_n" or plan.sort == "desc" else None,
+        "limit": effective_limit,
+        "inferred": inferred,
+        "x_axis_label": dimension_label[:-1] if dimension_label.endswith("s") else dimension_label if dimension else None,
+        "y_axis_label": value_label,
+        "tooltip_label": value_label,
+    }

@@ -111,16 +111,19 @@ class DuckDBExecutionEngine(AnalyticsExecutionEngine):
             return {"current_period": current["Period"], "previous_period": previous["Period"], "current_value": current_value, "previous_value": previous_value, "change": change, "change_percentage": None if previous_value == 0 else round(change / previous_value * 100, 2)}
         groups = plan.group_by
         group_sql = ", ".join(_identifier(group) for group in groups)
+        result_metric = _identifier("count") if aggregate == "COUNT" else metric
         value_expression = f"VAR_SAMP(TRY_CAST({metric} AS DOUBLE))" if plan.operation == "variance" else "COUNT(*)" if aggregate == "COUNT" else f"{aggregate}(TRY_CAST({metric} AS DOUBLE))"
-        base = f"SELECT {group_sql}, {value_expression} AS {metric} FROM dataset{where} GROUP BY {group_sql}"
+        base = f"SELECT {group_sql}, {value_expression} AS {result_metric} FROM dataset{where} GROUP BY {group_sql}"
         if plan.operation in {"percent_of_total", "contribution"}:
-            sql = f"WITH grouped AS ({base}) SELECT *, CASE WHEN SUM({metric}) OVER () = 0 THEN 0 ELSE ROUND({metric} / SUM({metric}) OVER () * 100, 2) END AS percentage_of_total FROM grouped"
+            sql = f"WITH grouped AS ({base}) SELECT *, CASE WHEN SUM({result_metric}) OVER () = 0 THEN 0 ELSE ROUND({result_metric} / SUM({result_metric}) OVER () * 100, 2) END AS percentage_of_total FROM grouped"
         elif plan.operation == "rank":
             partitions = plan.partition_by or groups[:-1]
             partition = f"PARTITION BY {', '.join(_identifier(item) for item in partitions)} " if partitions else ""
-            sql = f"WITH grouped AS ({base}) SELECT *, DENSE_RANK() OVER ({partition}ORDER BY {metric} DESC) AS rank FROM grouped"
+            sql = f"WITH grouped AS ({base}) SELECT *, DENSE_RANK() OVER ({partition}ORDER BY {result_metric} DESC) AS rank FROM grouped"
         else: sql = base
         if isinstance(plan.sort, list): order = ", ".join(f"{_identifier(rule.column)} {rule.direction.upper()}" for rule in plan.sort)
-        else: order = f"{metric} {'ASC' if plan.operation == 'bottom_n' or plan.sort == 'asc' else 'DESC'}"
+        else:
+            direction = "ASC" if plan.operation == "bottom_n" or plan.sort == "asc" else "DESC"
+            order = f"{result_metric} {direction}, " + ", ".join(f"{_identifier(group)} ASC" for group in groups)
         sql += f" ORDER BY {order} LIMIT ?"
         return connection.execute(sql, params + [plan.limit]).fetchdf().to_dict(orient="records")

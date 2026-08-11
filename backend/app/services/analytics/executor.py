@@ -173,30 +173,33 @@ def execute_plan(frame: pd.DataFrame, plan: AnalysisPlan) -> Any:
         return consecutive(rows, plan.group_by[0], plan.metric, plan.periods, plan.operation == "consecutive_growth")[:plan.limit]
     groups = plan.group_by
     aggregation = plan.aggregation or "sum"
-    selected = working[groups + [plan.metric]].copy()
-    selected[plan.metric] = pd.to_numeric(selected[plan.metric], errors="coerce")
-    selected = selected.dropna(subset=[plan.metric])
     if plan.compare_values:
-        selected = selected[selected[groups[0]].astype(str).str.casefold().isin([value.casefold() for value in plan.compare_values])]
-    if plan.operation == "variance" and plan.date_column:
+        working = working[working[groups[0]].astype(str).str.casefold().isin([value.casefold() for value in plan.compare_values])]
+    value_column = "count" if aggregation == "count" else plan.metric
+    if aggregation == "count":
+        grouped = working.groupby(groups, dropna=False).size().reset_index(name=value_column)
+    elif plan.operation == "variance" and plan.date_column:
         dates = pd.to_datetime(working[plan.date_column], errors="coerce", format="mixed")
         monthly = working.assign(_period=dates.dt.to_period(plan.time_granularity[0].upper() if plan.time_granularity else "M")).groupby(groups + ["_period"])[plan.metric].sum().reset_index()
         grouped = monthly.groupby(groups, dropna=False)[plan.metric].var().reset_index()
     else:
+        selected = working[groups + [plan.metric]].copy()
+        selected[plan.metric] = pd.to_numeric(selected[plan.metric], errors="coerce")
+        selected = selected.dropna(subset=[plan.metric])
         grouped = selected.groupby(groups, dropna=False)[plan.metric].agg("var" if plan.operation == "variance" else aggregation).reset_index()
     if plan.operation in {"percent_of_total", "contribution"}:
-        total = grouped[plan.metric].sum()
-        grouped["percentage_of_total"] = 0.0 if total == 0 else (grouped[plan.metric] / total * 100).round(2)
+        total = grouped[value_column].sum()
+        grouped["percentage_of_total"] = 0.0 if total == 0 else (grouped[value_column] / total * 100).round(2)
     if plan.operation == "rank":
         partitions = plan.partition_by or groups[:-1]
-        grouped["rank"] = grouped.groupby(partitions)[plan.metric].rank(method="dense", ascending=False).astype(int) if partitions else grouped[plan.metric].rank(method="dense", ascending=False).astype(int)
+        grouped["rank"] = grouped.groupby(partitions)[value_column].rank(method="dense", ascending=False).astype(int) if partitions else grouped[value_column].rank(method="dense", ascending=False).astype(int)
         if partitions:
             grouped = grouped[grouped["rank"] <= plan.limit]
     ascending = plan.operation == "bottom_n" or plan.sort == "asc"
     if isinstance(plan.sort, list):
         grouped = grouped.sort_values([rule.column for rule in plan.sort], ascending=[rule.direction == "asc" for rule in plan.sort])
     elif plan.operation in {"top_n", "bottom_n"} or plan.sort:
-        grouped = grouped.sort_values(plan.metric, ascending=ascending)
+        grouped = grouped.sort_values([value_column, *groups], ascending=[ascending, *([True] * len(groups))])
     return _records(grouped if plan.operation == "rank" and (plan.partition_by or groups[:-1]) else grouped.head(plan.limit))
 
 

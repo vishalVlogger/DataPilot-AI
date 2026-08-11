@@ -131,6 +131,8 @@ DuckDB natively executes validated filtering, sorting, aggregation, ranking, con
 
 Charts support bar, column, line, pie, and scatter output using Recharts. Chart values always come from the analytics executor.
 
+Automatic chart selection follows semantic roles: temporal series use line charts, categorical and limited high-cardinality rankings use bars, and two-measure comparisons use scatter plots. Ranking questions expose the chosen metric, aggregation, direction, and limit; ambiguous rankings use a deterministic semantic default only when one can be justified and display that interpretation prominently. High-cardinality chart output is capped safely, while explicit technically valid chart-type overrides remain available.
+
 ### Semantic analysis
 
 Semantic classification combines column names, physical types, uniqueness/cardinality, value patterns, plausible year ranges, and numeric variance. The profile exposes each column's role, confidence, uniqueness ratio, and allowed aggregations. The default UI keeps this under the expandable “Technical semantic profile” section.

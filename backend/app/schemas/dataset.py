@@ -221,6 +221,10 @@ class ChartResponse(BaseModel):
     drill_down: dict[str, Any] | None = None
     x_axis_label: str | None = None
     y_axis_label: str | None = None
+    tooltip_label: str | None = None
+    interpretation: dict[str, Any] = Field(default_factory=dict)
+    recommended_chart_type: Literal["bar", "column", "line", "pie", "scatter"]
+    selected_chart_type: Literal["bar", "column", "line", "pie", "scatter"]
 
 
 class QualityIssue(BaseModel):

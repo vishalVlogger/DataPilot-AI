@@ -53,13 +53,14 @@ export type AskResponse = {
   plan: Record<string, unknown>;
   chart_suggestion?: { type: ChartType } | null;
   explanation?: { metric?: string | null; aggregation?: string | null; grouped_by?: string[]; filters?: unknown[]; date_filter?: unknown } | null;
-  metadata?: { execution_engine?: string; dataset_version?: number; execution_ms?: number; provider_fallback?: boolean; cached?: boolean; session_id?: string; run_id?: string } | null;
+  metadata?: { execution_engine?: string; dataset_version?: number; execution_ms?: number; provider_fallback?: boolean; cached?: boolean; session_id?: string; run_id?: string; interpreted_as?: string } | null;
 };
 
 export type Insight = { type: string; severity: "info" | "warning" | "critical"; title: string; description: string; metric?: string | null; value?: number | string | null };
 export type QualityIssue = { issue_type: string; column: string | null; count: number; examples: string[]; severity: "info" | "warning" | "critical"; confidence: "low" | "medium" | "high"; message?: string | null };
 export type ChartType = "bar" | "column" | "line" | "pie" | "scatter";
-export type ChartResponse = { type: ChartType; title: string; x_axis: string; y_axis: string; x_axis_label?: string | null; y_axis_label?: string | null; show_legend?: boolean; drill_down?: Record<string, unknown> | null; data: Record<string, string | number | null>[]; plan: Record<string, unknown>; interpreted_request: string };
+export type ChartInterpretation = { interpreted_as: string; dimension?: string | null; metric?: string | null; aggregation?: string | null; sort?: string | null; limit: number; inferred: boolean; x_axis_label?: string | null; y_axis_label?: string | null; tooltip_label?: string | null };
+export type ChartResponse = { type: ChartType; title: string; x_axis: string; y_axis: string; x_axis_label?: string | null; y_axis_label?: string | null; tooltip_label?: string | null; show_legend?: boolean; drill_down?: Record<string, unknown> | null; data: Record<string, string | number | null>[]; plan: Record<string, unknown>; interpreted_request: string; interpretation: ChartInterpretation; recommended_chart_type: ChartType; selected_chart_type: ChartType };
 export type CleaningType = "remove_duplicates" | "trim_whitespace" | "standardize_lowercase" | "standardize_uppercase" | "standardize_titlecase" | "remove_missing_rows" | "fill_missing_mean" | "fill_missing_median" | "fill_missing_value";
 export type CleaningOperation = { type: CleaningType; column?: string; value?: string | number };
 export type CleaningPreview = { changes: { operation: CleaningOperation; affected_rows: number; affected_cells: number; before_examples: string[]; after_examples: string[]; warnings: string[] }[]; affected_rows: number; affected_cells: number; resulting_rows: number; warnings: string[] };

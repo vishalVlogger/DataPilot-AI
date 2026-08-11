@@ -1,7 +1,7 @@
 from contextvars import ContextVar
 from dataclasses import dataclass
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.database import session_scope
@@ -37,10 +37,15 @@ async def authenticated_user(credentials: HTTPAuthorizationCredentials | None = 
         return user
 
 
-async def require_auth(user=Depends(authenticated_user), x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID")) -> Principal:
+async def require_system_admin(user=Depends(authenticated_user)):
+    if not user.is_system_admin: raise AppError("System administrator access is required.", "SYSTEM_ADMIN_REQUIRED", 403)
+    return user
+
+
+async def require_auth(request: Request, user=Depends(authenticated_user), x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID")) -> Principal:
     with session_scope() as session:
         workspaces = WorkspaceRepository(session)
         accessible = workspaces.list_for_user(user.id)
         if not accessible: raise AppError("Workspace not found.", "WORKSPACE_NOT_FOUND", 404)
         selected = workspaces.get_for_user(x_workspace_id, user.id) if x_workspace_id else accessible[0]
-    principal = Principal(user_id=user.id, workspace_id=selected["id"], role=selected["role"]); _principal.set(principal); return principal
+    principal = Principal(user_id=user.id, workspace_id=selected["id"], role=selected["role"]); _principal.set(principal); request.state.user_id = user.id; request.state.workspace_id = selected["id"]; return principal

@@ -1,0 +1,6 @@
+"use client";
+import Link from "next/link";
+import { FormEvent, useState } from "react";
+import { forgotPassword } from "@/services/api";
+
+export default function ForgotPasswordPage(){const[email,setEmail]=useState(""),[message,setMessage]=useState(""),[error,setError]=useState(""),[busy,setBusy]=useState(false);async function submit(event:FormEvent){event.preventDefault();setBusy(true);setError("");try{setMessage((await forgotPassword(email)).message);}catch(reason){setError(reason instanceof Error?reason.message:"Unable to submit request");}finally{setBusy(false);}}return <div className="auth-page"><section className="auth-brand"><div className="brand"><span>DP</span><div>DataPilot <b>AI</b></div></div><p>Secure account recovery without exposing whether an account exists.</p></section><form className="auth-card" onSubmit={submit}><p className="eyebrow">ACCOUNT RECOVERY</p><h1>Forgot your password?</h1><p>Enter your email and we’ll send a time-limited reset link if an account exists.</p>{message&&<div className="success-banner">{message}</div>}{error&&<div className="error">{error}</div>}<label>Email<input type="email" required value={email} onChange={event=>setEmail(event.target.value)}/></label><button disabled={busy}>{busy?"Sending…":"Send reset link"}</button><small><Link href="/login">Back to sign in</Link></small></form></div>}

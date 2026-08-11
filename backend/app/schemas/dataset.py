@@ -377,6 +377,10 @@ class JobResponse(BaseModel):
     error_code: str | None
     error_message: str | None
     result_reference: str | None
+    attempt_count: int = 0
+    max_attempts: int = 1
+    last_error: str | None = None
+    retryable: bool = False
 
 
 class JobAcceptedResponse(BaseModel):

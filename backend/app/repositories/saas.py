@@ -32,6 +32,12 @@ class UserRepository:
         user.last_login_at = datetime.now(timezone.utc); self.session.commit()
     def update_name(self, user: User, display_name: str) -> User:
         user.display_name = display_name; self.session.commit(); return user
+    def verify_email(self, user: User) -> User:
+        user.email_verified_at = datetime.now(timezone.utc); self.session.commit(); return user
+    def update_password(self, user: User, password_hash: str) -> User:
+        user.password_hash = password_hash; self.session.commit(); return user
+    def acknowledge_beta(self, user: User) -> User:
+        user.beta_acknowledged_at = datetime.now(timezone.utc); self.session.commit(); return user
 
 
 class WorkspaceRepository:
@@ -74,6 +80,11 @@ class RefreshSessionRepository:
     def revoke_hash(self, token_hash: str) -> None:
         item = self.session.scalar(select(RefreshSession).where(RefreshSession.token_hash == token_hash, RefreshSession.revoked_at.is_(None)))
         if item: self.revoke(item)
+    def revoke_all(self, user_id: str) -> int:
+        now = datetime.now(timezone.utc)
+        items = self.session.scalars(select(RefreshSession).where(RefreshSession.user_id == user_id, RefreshSession.revoked_at.is_(None))).all()
+        for item in items: item.revoked_at = now
+        self.session.commit(); return len(items)
 
 
 class UsageRepository:

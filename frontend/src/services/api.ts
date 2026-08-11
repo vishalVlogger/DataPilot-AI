@@ -4,12 +4,15 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000
 let accessToken: string | null = null;
 let workspaceId: string | null = null;
 
-export type User = { id:string; email:string; display_name:string; is_active:boolean; created_at:string; last_login_at:string|null };
-export type Workspace = { id:string; name:string; slug:string; role:"owner"|"admin"|"member"; owner_user_id:string; plan_code:string; created_at:string; updated_at:string };
+export type User = { id:string; email:string; display_name:string; is_active:boolean; is_system_admin:boolean; email_verified_at:string|null; beta_acknowledged_at:string|null; created_at:string; last_login_at:string|null };
+export type Workspace = { id:string; name:string; slug:string; role:"owner"|"admin"|"member"; owner_user_id:string; plan_code:string; external_ai_enabled:boolean; created_at:string; updated_at:string };
 export type AuthPayload = { access_token:string; expires_in:number; user:User; workspaces:Workspace[] };
 export type Usage = { plan_code:string; datasets:number; storage_bytes:number; analyses_this_month:number; ai_requests_this_month:number; reports_this_month:number; rows_this_month:number; limits:Record<string,number>; percentages:Record<string,number> };
 export type Activity = { id:string; activity_type:string; user_id:string|null; resource_id:string|null; details:Record<string,unknown>|null; created_at:string };
 export type Dashboard = { usage:Usage; recent_datasets:Array<Record<string,unknown>>; recent_activity:Activity[] };
+export type Member={user_id:string;email:string;display_name:string;role:"owner"|"admin"|"member";joined_at:string};
+export type Invitation={id:string;workspace_id:string;email:string;role:"admin"|"member";invited_by_user_id:string;created_at:string;expires_at:string;accepted_at:string|null;revoked_at:string|null};
+export type ProviderStatus={app_version:string;configured_provider:string;effective_provider:string;external_ai_enabled:boolean;email_verified:boolean;privacy_notice:string};
 
 export function setApiAuth(token: string | null, workspace: string | null) { accessToken = token; workspaceId = workspace; }
 
@@ -24,21 +27,37 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
 
 async function parse<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.message ?? "Request failed");
+  if (!response.ok) { const context={request_id:payload.request_id as string|undefined,route:new URL(response.url).pathname,error_code:payload.error_code as string|undefined};if(typeof window!=="undefined")sessionStorage.setItem("datapilot_last_error",JSON.stringify(context));throw new Error(`${payload.message ?? "Request failed"}${payload.request_id?` Reference ID: ${payload.request_id}`:""}`); }
   return payload as T;
 }
 
-export async function register(email:string, password:string, displayName:string):Promise<AuthPayload> { return parse(await apiFetch("/auth/register", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password,display_name:displayName})})); }
+export async function register(email:string, password:string, displayName:string, invitationToken?:string):Promise<AuthPayload> { return parse(await apiFetch("/auth/register", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password,display_name:displayName,invitation_token:invitationToken,beta_acknowledged:true})})); }
 export async function login(email:string, password:string):Promise<AuthPayload> { return parse(await apiFetch("/auth/login", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})})); }
 export async function refreshAuth():Promise<AuthPayload> { return parse(await apiFetch("/auth/refresh", {method:"POST"})); }
 export async function logout():Promise<void> { const response=await apiFetch("/auth/logout",{method:"POST"}); if(!response.ok) await parse(response); }
 export async function getMe():Promise<{user:User;workspaces:Workspace[]}> { return parse(await apiFetch("/auth/me")); }
 export async function listWorkspaces():Promise<Workspace[]> { return parse(await apiFetch("/workspaces")); }
-export async function updateWorkspace(id:string, values:{name?:string;slug?:string}):Promise<Workspace> { return parse(await apiFetch(`/workspaces/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(values)})); }
+export async function updateWorkspace(id:string, values:{name?:string;slug?:string;external_ai_enabled?:boolean}):Promise<Workspace> { return parse(await apiFetch(`/workspaces/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(values)})); }
 export async function updateUser(displayName:string):Promise<User> { return parse(await apiFetch("/auth/me",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({display_name:displayName})})); }
+export async function verifyEmail(token:string):Promise<{message:string}>{return parse(await apiFetch("/auth/verify-email",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token})}));}
+export async function resendVerification():Promise<{message:string}>{return parse(await apiFetch("/auth/resend-verification",{method:"POST"}));}
+export async function forgotPassword(email:string):Promise<{message:string}>{return parse(await apiFetch("/auth/forgot-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email})}));}
+export async function resetPassword(token:string,newPassword:string):Promise<{message:string}>{return parse(await apiFetch("/auth/reset-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token,new_password:newPassword})}));}
 export async function getUsage():Promise<Usage> { return parse(await apiFetch("/usage")); }
 export async function getActivity(limit=50,offset=0):Promise<Activity[]> { return parse(await apiFetch(`/activity?limit=${limit}&offset=${offset}`)); }
 export async function getDashboard():Promise<Dashboard> { return parse(await apiFetch("/dashboard")); }
+export async function listMembers(id:string):Promise<Member[]>{return parse(await apiFetch(`/workspaces/${id}/members`));}
+export async function listInvitations(id:string):Promise<Invitation[]>{return parse(await apiFetch(`/workspaces/${id}/invitations`));}
+export async function inviteMember(id:string,email:string,role:"admin"|"member"):Promise<Invitation>{return parse(await apiFetch(`/workspaces/${id}/invitations`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,role})}));}
+export async function revokeInvitation(workspaceId:string,invitationId:string):Promise<void>{const r=await apiFetch(`/workspaces/${workspaceId}/invitations/${invitationId}`,{method:"DELETE"});if(!r.ok)await parse(r);}
+export async function updateMemberRole(workspaceId:string,userId:string,role:"admin"|"member"):Promise<Member>{return parse(await apiFetch(`/workspaces/${workspaceId}/members/${userId}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({role})}));}
+export async function removeMember(workspaceId:string,userId:string):Promise<void>{const r=await apiFetch(`/workspaces/${workspaceId}/members/${userId}`,{method:"DELETE"});if(!r.ok)await parse(r);}
+export async function acceptInvitation(token:string):Promise<Invitation>{return parse(await apiFetch(`/invitations/${encodeURIComponent(token)}/accept`,{method:"POST"}));}
+export async function getProviderStatus():Promise<ProviderStatus>{return parse(await apiFetch("/ai/provider-status"));}
+export async function submitFeedback(values:{category:string;message:string;current_page?:string;dataset_id?:string;include_technical_context:boolean;request_id?:string;route?:string;error_code?:string;user_agent?:string}):Promise<{id:string}>{return parse(await apiFetch("/feedback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(values)}));}
+export async function getAdminSummary():Promise<Record<string,number>>{return parse(await apiFetch("/admin/summary"));}
+export async function getAdminFeedback():Promise<Array<Record<string,unknown>>>{return parse(await apiFetch("/admin/feedback"));}
+export async function supportLookup(query:string):Promise<{results:Array<Record<string,unknown>>}>{return parse(await apiFetch(`/admin/support?q=${encodeURIComponent(query)}`));}
 
 export async function inspectWorkbook(file:File):Promise<string[]> { const body=new FormData();body.append("file",file);const result=await parse<{sheets:{name:string}[]}>(await apiFetch("/datasets/inspect",{method:"POST",body}));return result.sheets.map(s=>s.name); }
 export async function uploadDataset(file:File,sheetName?:string):Promise<DatasetMetadata> { const body=new FormData();body.append("file",file);if(sheetName)body.append("sheet_name",sheetName);return parse(await apiFetch("/datasets/upload",{method:"POST",body})); }

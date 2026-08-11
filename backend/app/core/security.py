@@ -51,5 +51,14 @@ def new_refresh_token() -> tuple[str, str]:
     return token, hashlib.sha256(token.encode()).hexdigest()
 
 
+def new_one_time_token() -> tuple[str, str]:
+    token = secrets.token_urlsafe(48)
+    return token, hash_one_time_token(token)
+
+
+def hash_one_time_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def hash_refresh_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()

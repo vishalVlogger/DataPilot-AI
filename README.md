@@ -20,6 +20,8 @@ Profiles include semantic column roles in addition to physical dtypes. Measures,
 
 Accounts use Argon2 passwords, short-lived JWT access tokens, rotating HttpOnly refresh cookies, and backend-validated workspace membership. Dataset metadata, versions, sessions, runs, saved analyses, jobs, reports, usage, and activity are all tenant-scoped.
 
+Beta accounts support hashed, expiring, one-time email-verification and password-reset links through console or SMTP email providers. Password reset revokes every refresh session. Workspace owners/admins can invite verified users as admins or members, while system-administrator support access remains separate from workspace roles. The beta UI includes privacy acknowledgement, feedback, provider controls, account recovery, and metadata-only support tools.
+
 Uploaded files are assigned UUIDs and normalized to Zstandard-compressed Parquet beneath the configured storage root. Version 0 is immutable; every confirmed cleaning or restore creates a numbered Parquet version and updates the database pointer. DuckDB scans supported plans directly from Parquet. Paths and raw internal models are never returned to clients.
 
 ## Run locally
@@ -193,3 +195,6 @@ Legacy Pickle datasets are migrated lazily on first access. Their existing files
 - Each version is a full Parquet snapshot; delta versions and distributed job workers are future work.
 - CSV/Excel ingestion still parses once with Pandas before normalization to Parquet.
 - Semantic classification is deterministic and heuristic. Domain-specific concepts with ambiguous names may still need future user overrides or a semantic-metadata editor.
+- Account and full-workspace deletion are admin-assisted during beta; individual dataset deletion remains self-service.
+- Redis rate limiting is optional, while report execution still uses the local retry-safe executor. A distributed worker adapter is the next infrastructure step.
+- The storage interface and tenant-scoped keys are cloud-ready, but this release ships only the local backend; S3-compatible configuration is reserved for the future adapter.

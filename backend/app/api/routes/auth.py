@@ -7,11 +7,24 @@ from app.core.config import get_settings
 from app.core.database import session_scope
 from app.core.errors import AppError
 from app.core.rate_limit import rate_limiter
-from app.core.security import create_access_token, hash_password, hash_refresh_token, new_refresh_token, normalize_email, verify_password
-from app.repositories import RefreshSessionRepository, UserRepository, WorkspaceRepository
-from app.schemas.saas import AuthResponse, CurrentUserResponse, LoginRequest, RegisterRequest, UserResponse, UserUpdateRequest, WorkspaceResponse
+from sqlalchemy import func, select
+
+from app.core.security import create_access_token, hash_one_time_token, hash_password, hash_refresh_token, new_one_time_token, new_refresh_token, normalize_email, verify_password
+from app.models import User
+from app.repositories import AccountTokenRepository, InvitationRepository, RefreshSessionRepository, UserRepository, WorkspaceRepository
+from app.schemas.saas import AuthResponse, BetaAcknowledgementRequest, CurrentUserResponse, EmailRequest, LoginRequest, RegisterRequest, ResetPasswordRequest, TokenRequest, UserResponse, UserUpdateRequest, WorkspaceResponse
+from app.services.email import get_email_provider
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+
+async def _send_account_token(user: User, purpose: str) -> None:
+    settings = get_settings(); token, token_hash = new_one_time_token()
+    duration = timedelta(hours=settings.email_verification_expire_hours) if purpose == "verify_email" else timedelta(minutes=settings.password_reset_expire_minutes)
+    with session_scope() as session: AccountTokenRepository(session).create(user.id, purpose, token_hash, datetime.now(timezone.utc) + duration)
+    route = "verify-email" if purpose == "verify_email" else "reset-password"
+    label = "Verify your DataPilot email" if purpose == "verify_email" else "Reset your DataPilot password"
+    await get_email_provider().send_email(user.email, label, f"{label}: {settings.frontend_url}/{route}?token={token}\nThis one-time link expires soon.")
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
@@ -30,11 +43,19 @@ def _issue(user, response: Response, request: Request) -> AuthResponse:
 @router.post("/register", response_model=AuthResponse, status_code=201)
 async def register(payload: RegisterRequest, request: Request, response: Response) -> AuthResponse:
     rate_limiter.check(f"register:{request.client.host if request.client else 'unknown'}", 5, 300); normalized = normalize_email(str(payload.email))
+    settings = get_settings()
+    if not settings.beta_registration_enabled: raise AppError("Registration is currently closed.", "REGISTRATION_DISABLED", 403)
     with session_scope() as session:
         users = UserRepository(session)
         if users.by_email(normalized): raise AppError("An account with this email already exists.", "AUTH_EMAIL_EXISTS", 409)
+        if settings.beta_max_users is not None and int(session.scalar(select(func.count()).select_from(User)) or 0) >= settings.beta_max_users: raise AppError("The beta user limit has been reached.", "BETA_USER_LIMIT_REACHED", 403)
+        if settings.registration_mode == "invite_only":
+            if not payload.invitation_token: raise AppError("A valid invitation is required.", "INVITATION_REQUIRED", 403)
+            InvitationRepository(session).validate_for_registration(hash_one_time_token(payload.invitation_token), normalized)
         user = users.create(str(payload.email), normalized, hash_password(payload.password), payload.display_name.strip())
+        if payload.beta_acknowledged: users.acknowledge_beta(user)
         WorkspaceRepository(session).create(user.id, f"{user.display_name}'s Workspace", get_settings().default_plan)
+    await _send_account_token(user, "verify_email")
     return _issue(user, response, request)
 
 
@@ -78,4 +99,43 @@ async def me(user=Depends(authenticated_user)) -> CurrentUserResponse:
 @router.patch("/me", response_model=UserResponse)
 async def update_me(payload: UserUpdateRequest, user=Depends(authenticated_user)) -> UserResponse:
     with session_scope() as session: updated = UserRepository(session).update_name(UserRepository(session).get(user.id), payload.display_name.strip())
+    return UserResponse.model_validate(updated, from_attributes=True)
+
+
+@router.post("/verify-email")
+async def verify_email(payload: TokenRequest) -> dict[str, str]:
+    with session_scope() as session:
+        token = AccountTokenRepository(session).consume(hash_one_time_token(payload.token), "verify_email")
+        UserRepository(session).verify_email(UserRepository(session).get(token.user_id))
+    return {"message": "Email verified successfully."}
+
+
+@router.post("/resend-verification")
+async def resend_verification(request: Request, user=Depends(authenticated_user)) -> dict[str, str]:
+    rate_limiter.check(f"verify-resend:user:{user.id}", 3, 3600); rate_limiter.check(f"verify-resend:ip:{request.client.host if request.client else 'unknown'}", 10, 3600)
+    if user.email_verified_at is None: await _send_account_token(user, "verify_email")
+    return {"message": "If verification is still required, a new link has been sent."}
+
+
+@router.post("/forgot-password")
+async def forgot_password(payload: EmailRequest, request: Request) -> dict[str, str]:
+    normalized = normalize_email(str(payload.email)); host = request.client.host if request.client else "unknown"
+    rate_limiter.check(f"password-reset:ip:{host}", 10, 3600); rate_limiter.check(f"password-reset:email:{hash_one_time_token(normalized)}", 3, 3600)
+    with session_scope() as session: user = UserRepository(session).by_email(normalized)
+    if user and user.is_active: await _send_account_token(user, "reset_password")
+    return {"message": "If an account exists, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+async def reset_password(payload: ResetPasswordRequest) -> dict[str, str]:
+    with session_scope() as session:
+        item = AccountTokenRepository(session).consume(hash_one_time_token(payload.token), "reset_password")
+        user = UserRepository(session).get(item.user_id); UserRepository(session).update_password(user, hash_password(payload.new_password)); RefreshSessionRepository(session).revoke_all(user.id)
+    return {"message": "Password reset successfully. Please sign in again."}
+
+
+@router.post("/acknowledge-beta", response_model=UserResponse)
+async def acknowledge_beta(payload: BetaAcknowledgementRequest, user=Depends(authenticated_user)) -> UserResponse:
+    if not payload.acknowledged: raise AppError("Beta acknowledgement is required.", "BETA_ACKNOWLEDGEMENT_REQUIRED", 400)
+    with session_scope() as session: updated = UserRepository(session).acknowledge_beta(UserRepository(session).get(user.id))
     return UserResponse.model_validate(updated, from_attributes=True)

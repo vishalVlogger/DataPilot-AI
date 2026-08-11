@@ -8,6 +8,8 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=10, max_length=128)
     display_name: str = Field(min_length=1, max_length=120)
+    invitation_token: str | None = Field(default=None, min_length=20, max_length=500)
+    beta_acknowledged: bool = False
 
     @field_validator("password")
     @classmethod
@@ -23,11 +25,11 @@ class LoginRequest(BaseModel):
 
 
 class UserResponse(BaseModel):
-    id: str; email: EmailStr; display_name: str; is_active: bool; created_at: datetime; last_login_at: datetime | None
+    id: str; email: EmailStr; display_name: str; is_active: bool; is_system_admin: bool = False; email_verified_at: datetime | None = None; beta_acknowledged_at: datetime | None = None; created_at: datetime; last_login_at: datetime | None
 
 
 class WorkspaceResponse(BaseModel):
-    id: str; name: str; slug: str; owner_user_id: str; role: Literal["owner", "admin", "member"]; plan_code: str; created_at: datetime; updated_at: datetime
+    id: str; name: str; slug: str; owner_user_id: str; role: Literal["owner", "admin", "member"]; plan_code: str; external_ai_enabled: bool = True; created_at: datetime; updated_at: datetime
 
 
 class AuthResponse(BaseModel):
@@ -45,6 +47,7 @@ class WorkspaceCreateRequest(BaseModel):
 class WorkspaceUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     slug: str | None = Field(default=None, min_length=3, max_length=120, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    external_ai_enabled: bool | None = None
 
 
 class UsageSummaryResponse(BaseModel):
@@ -61,3 +64,25 @@ class DashboardResponse(BaseModel):
 
 class UserUpdateRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=120)
+
+
+class EmailRequest(BaseModel):
+    email: EmailStr
+
+
+class TokenRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=500)
+
+
+class ResetPasswordRequest(TokenRequest):
+    new_password: str = Field(min_length=10, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def reset_password_strength(cls, value: str) -> str:
+        if not any(c.isalpha() for c in value) or not any(c.isdigit() for c in value): raise ValueError("Password must contain letters and numbers")
+        return value
+
+
+class BetaAcknowledgementRequest(BaseModel):
+    acknowledged: bool

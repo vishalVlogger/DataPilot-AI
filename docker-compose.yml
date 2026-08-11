@@ -1,4 +1,17 @@
 services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    profiles: ["distributed"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
   postgres:
     image: postgres:17-alpine
     environment:
@@ -25,6 +38,20 @@ services:
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       AI_PROVIDER: ${AI_PROVIDER:-mock}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      APP_VERSION: ${APP_VERSION:-0.6.0-beta}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
+      EMAIL_FROM: ${EMAIL_FROM:-DataPilot AI <no-reply@datapilot.local>}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-memory}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JOB_EXECUTION_MODE: ${JOB_EXECUTION_MODE:-local}
+      DATASET_STORAGE_BACKEND: ${DATASET_STORAGE_BACKEND:-local}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      REGISTRATION_MODE: ${REGISTRATION_MODE:-open}
     command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     volumes:
       - dataset_data:/app/data
@@ -55,3 +82,4 @@ services:
 volumes:
   postgres_data:
   dataset_data:
+  redis_data:

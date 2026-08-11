@@ -36,10 +36,22 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
     def _folder(self, dataset_id: str) -> Path:
         if not dataset_id or any(character not in "0123456789abcdef-" for character in dataset_id.lower()):
             raise DatasetNotFoundError()
-        folder = (self.root / dataset_id).resolve()
+        if not self.workspace_id or any(character not in "0123456789abcdef-" for character in self.workspace_id.lower()): raise DatasetNotFoundError()
+        legacy = (self.root / dataset_id).resolve()
+        tenant_folder = (self.root / "workspaces" / self.workspace_id / dataset_id).resolve()
+        folder = tenant_folder if tenant_folder.is_dir() else legacy if legacy.is_dir() else tenant_folder
         if self.root not in folder.parents:
             raise DatasetNotFoundError()
         return folder
+
+    def _create_legacy_parquet_alias(self, dataset_id: str, version_path: Path) -> None:
+        """Keep the pre-Milestone-6 local path readable while tenant storage is canonical."""
+        alias = self.root / dataset_id / "versions" / version_path.name
+        alias.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            alias.hardlink_to(version_path)
+        except OSError:
+            shutil.copy2(version_path, alias)
 
     def _write_parquet(self, frame: pd.DataFrame, path: Path) -> None:
         try:
@@ -53,6 +65,7 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
             versions.mkdir(parents=True)
             version_path = versions / "version_0.parquet"
             self._write_parquet(frame, version_path)
+            self._create_legacy_parquet_alias(dataset_id, version_path)
             if original_content is not None:
                 extension = Path(name).suffix.lower() if Path(name).suffix else ".bin"
                 (folder / f"original{extension}").write_bytes(original_content)
@@ -60,7 +73,7 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
         except Exception as exc:
             raise AppError("Unable to persist the uploaded dataset.", "STORAGE_WRITE_FAILED", 500) from exc
         now = datetime.now(timezone.utc)
-        metadata: dict[str, Any] = {"id": dataset_id, "workspace_id": self.workspace_id, "name": Path(name).name, "source_type": source_type, "sheet_name": sheet_name, "rows": len(frame), "columns": len(frame.columns), "created_at": now.isoformat(), "updated_at": now.isoformat(), "current_version": 0, "storage_format": "parquet", "storage_key": f"{dataset_id}/versions/version_0.parquet", "status": "ready", "storage_bytes": 0}
+        metadata: dict[str, Any] = {"id": dataset_id, "workspace_id": self.workspace_id, "name": Path(name).name, "source_type": source_type, "sheet_name": sheet_name, "rows": len(frame), "columns": len(frame.columns), "created_at": now.isoformat(), "updated_at": now.isoformat(), "current_version": 0, "storage_format": "parquet", "storage_key": str(version_path.relative_to(self.root)).replace("\\", "/"), "status": "ready", "storage_bytes": 0}
         (folder / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
         (folder / "audit.json").write_text("[]", encoding="utf-8")
         (folder / "versions.json").write_text(json.dumps({"current_version": 0, "versions": [{"version": 0, "created_at": now.isoformat(), "operation": "upload", "description": "Original uploaded dataset", "affected_rows": 0, "source_version": None, "storage_key": metadata["storage_key"]}]}), encoding="utf-8")
@@ -181,12 +194,22 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
         self.create_version(dataset_id, frame, "legacy_save", "Saved working dataset")
 
     def delete_dataset(self, dataset_id: str) -> None:
-        folder = self._folder(dataset_id); self._ensure_database_record(dataset_id)
+        folder = self._folder(dataset_id); legacy_alias = self.root / dataset_id; self._ensure_database_record(dataset_id)
         with session_scope() as session: DatasetRepository(session, self.workspace_id).delete(dataset_id)
         try:
             if folder.is_dir(): shutil.rmtree(folder)
+            if legacy_alias != folder and legacy_alias.is_dir(): shutil.rmtree(legacy_alias)
         except Exception as exc:
             raise AppError("Metadata was deleted but local files could not be removed.", "STORAGE_WRITE_FAILED", 500) from exc
 
 
-DatasetStorage = LocalParquetDatasetStorage
+LocalDatasetStorage = LocalParquetDatasetStorage
+
+
+def get_dataset_storage(*args, **kwargs) -> DatasetStorageBackend:
+    backend = get_settings().dataset_storage_backend.casefold()
+    if backend == "local": return LocalDatasetStorage(*args, **kwargs)
+    raise AppError("Configured dataset storage backend is unavailable.", "STORAGE_BACKEND_UNAVAILABLE", 503)
+
+
+DatasetStorage = LocalDatasetStorage

@@ -12,15 +12,19 @@ router = APIRouter()
 
 @router.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "DataPilot AI"}
+    return {"status": "ok", "service": "DataPilot AI", "version": get_settings().app_version}
 
 
 @router.get("/ready")
 async def readiness() -> dict[str, str]:
     try:
         with session_scope() as session: session.execute(text("SELECT 1"))
-        root: Path = get_settings().storage_root.resolve(); root.mkdir(parents=True, exist_ok=True)
+        settings = get_settings(); root: Path = settings.storage_root.resolve(); root.mkdir(parents=True, exist_ok=True)
         if not root.is_dir(): raise OSError("storage root is not a directory")
+        if settings.rate_limit_backend == "redis":
+            if not settings.redis_url: raise OSError("Redis is required but not configured")
+            from redis import Redis
+            Redis.from_url(settings.redis_url).ping()
     except Exception as exc:
         raise AppError("A required service is unavailable.", "SERVICE_NOT_READY", 503) from exc
-    return {"status": "ready", "database": "ok", "storage": "ok"}
+    return {"status": "ready", "database": "ok", "storage": "ok", "rate_limit": get_settings().rate_limit_backend}

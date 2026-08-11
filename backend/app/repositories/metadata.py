@@ -107,9 +107,9 @@ class SavedAnalysisRepository(ScopedRepository):
 
 
 class JobRepository(ScopedRepository):
-    def create(self, job_type: str, dataset_id: str | None, stage: str = "queued", user_id: str | None = None) -> dict[str, Any]:
+    def create(self, job_type: str, dataset_id: str | None, stage: str = "queued", user_id: str | None = None, **values: Any) -> dict[str, Any]:
         if dataset_id: DatasetRepository(self.session, self.workspace_id).get(dataset_id)
-        model = Job(workspace_id=self.workspace_id, user_id=user_id, type=job_type, dataset_id=dataset_id, stage=stage); self.session.add(model); self.session.commit(); return _dict(model)
+        model = Job(workspace_id=self.workspace_id, user_id=user_id, type=job_type, dataset_id=dataset_id, stage=stage, **values); self.session.add(model); self.session.commit(); return _dict(model)
     def get(self, job_id: str) -> dict[str, Any]:
         model = self.session.scalar(select(Job).where(Job.id == job_id, Job.workspace_id == self.workspace_id))
         if model is None: raise AppError("Background job not found.", "JOB_NOT_FOUND", 404)

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from app.core.config import get_settings
+from app.core.errors import AppError
 from app.schemas.dataset import (
     AnalyzeRequest, AnalysisResponse, AskRequest, AskResponse, ChartRequest, ChartResponse, ChartSuggestion,
     CleaningApplyResponse, CleaningPreview, CleaningRequest, DatasetMetadata, DatasetRenameRequest,
@@ -25,21 +26,33 @@ from app.services.analytics.semantics import describe_chart_plan, recommend_char
 from app.services.analytics.quality import analyze_quality
 from app.services.cleaning.service import audit_entries, clean_frame
 from app.services.datasets.parser import inspect_sheets, parse_dataset
-from app.services.datasets.storage import DatasetStorage
+from app.services.datasets.storage import DatasetStorageBackend, get_dataset_storage
 from app.services.ai.mock import MockAIProvider
 from app.services.cache import analysis_cache
 from app.services.reports import generate_html_report
 from app.services.reports import generate_pdf_report
 from app.services.jobs import JobManager
 from app.core.database import session_scope
-from app.repositories import AnalysisRunRepository, AnalysisSessionRepository, DatasetRepository
+from app.repositories import AnalysisRunRepository, AnalysisSessionRepository, DatasetRepository, UserRepository, WorkspaceRepository
 from app.services.visualization.charts import generate_chart
 from app.core.auth import current_principal, require_auth
 from app.core.rate_limit import rate_limiter
 from app.services.saas import UsageService
+from app.services.features import feature_flags
 
 router = APIRouter(prefix="/datasets", dependencies=[Depends(require_auth)])
 logger = logging.getLogger("datapilot.analytics")
+
+
+def _configured_ai_provider(settings):
+    principal = current_principal()
+    if settings.ai_provider != "openai": return get_ai_provider(settings)
+    with session_scope() as session:
+        user = UserRepository(session).get(principal.user_id)
+        workspace = WorkspaceRepository(session).get_for_user(principal.workspace_id, principal.user_id)
+    if not feature_flags.enabled("external_ai") or not workspace.get("external_ai_enabled", True) or user.email_verified_at is None:
+        return MockAIProvider()
+    return get_ai_provider(settings)
 
 
 def _validate_profile_plan(profile: dict, plan) -> None:
@@ -81,9 +94,9 @@ def _record_run(dataset_id: str, requested_session_id: str | None, version: int,
     return session_record["id"], run["id"]
 
 
-def storage() -> DatasetStorage:
+def storage() -> DatasetStorageBackend:
     settings = get_settings(); principal = current_principal()
-    return DatasetStorage(settings.storage_root, settings.parquet_compression, principal.workspace_id, principal.user_id)
+    return get_dataset_storage(settings.storage_root, settings.parquet_compression, principal.workspace_id, principal.user_id)
 
 
 @router.post("/inspect", response_model=InspectResponse)
@@ -143,7 +156,7 @@ async def ask_dataset(dataset_id: str, request: AskRequest) -> AskResponse:
     ai_started = perf_counter()
     fallback_used = False
     try:
-        provider = get_ai_provider(settings)
+        provider = _configured_ai_provider(settings)
         plan = await provider.create_analysis_plan(request.question, profile["columns"])
         _validate_profile_plan(profile, plan)
     except Exception:
@@ -201,7 +214,7 @@ async def create_chart(dataset_id: str, request: ChartRequest) -> ChartResponse:
     else:
         profile = profile_dataset(frame, dataset_id)
         try:
-            plan = await get_ai_provider(settings).create_analysis_plan(request.question or "", profile["columns"])
+            plan = await _configured_ai_provider(settings).create_analysis_plan(request.question or "", profile["columns"])
             validate_plan(frame, plan)
         except Exception:
             if settings.ai_provider == "mock": raise
@@ -266,6 +279,7 @@ async def restore_version(dataset_id: str, version: int) -> CleaningApplyRespons
 @router.post("/{dataset_id}/report")
 async def create_report(dataset_id: str, request: ReportRequest) -> Response:
     settings = get_settings(); principal = current_principal(); usage = UsageService(principal.workspace_id); usage.enforce_report(); rate_limiter.check(f"report:{principal.user_id}", 10, 60); store = storage(); store.load_metadata(dataset_id)
+    if request.format == "pdf" and not feature_flags.enabled("pdf_reports"): raise AppError("PDF reports are disabled.", "REPORT_FORMAT_DISABLED", 400)
     usage.record("report", 1, principal.user_id, dataset_id); usage.activity("report_generated", principal.user_id, dataset_id, {"format": request.format, "async": request.async_job})
     if request.async_job and settings.background_jobs_enabled:
         job = JobManager().create_report_job(dataset_id, request, store)

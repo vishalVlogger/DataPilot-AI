@@ -12,15 +12,16 @@ from app.schemas.dataset import AnalysisPlan, AnalysisRunResponse, DrillDownRequ
 from app.services.analytics.engines import ExecutionEngineSelector
 from app.services.analytics.profiler import profile_dataset
 from app.services.cache import analysis_cache
-from app.services.datasets.storage import DatasetStorage
+from app.services.datasets.storage import DatasetStorageBackend, get_dataset_storage
 from app.services.saas import UsageService
+from app.services.jobs import JobManager
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 
 
-def storage() -> DatasetStorage:
+def storage() -> DatasetStorageBackend:
     settings = get_settings(); principal = current_principal()
-    return DatasetStorage(settings.storage_root, settings.parquet_compression, principal.workspace_id, principal.user_id)
+    return get_dataset_storage(settings.storage_root, settings.parquet_compression, principal.workspace_id, principal.user_id)
 
 
 def _public_job(item: dict) -> dict:
@@ -137,3 +138,10 @@ async def get_job_result(job_id: str) -> FileResponse:
     if root not in path.parents or not path.is_file(): raise AppError("The job result is unavailable.", "JOB_RESULT_NOT_FOUND", 404)
     media_type = "application/pdf" if path.suffix.lower() == ".pdf" else "text/html"
     return FileResponse(path, media_type=media_type, filename=path.name)
+
+
+@router.post("/jobs/{job_id}/retry", response_model=JobResponse)
+async def retry_job(job_id: str) -> JobResponse:
+    try: item = JobManager().retry(job_id, storage())
+    except ValueError as exc: raise AppError(str(exc), "JOB_NOT_RETRYABLE", 409) from exc
+    return JobResponse.model_validate(_public_job(item))

@@ -37,7 +37,7 @@ def generate_html_report(frame: pd.DataFrame, dataset_id: str, options: ReportRe
         sections.append(f"<section><h2>Chart data summary</h2><p>{len(profile['measure_columns'])} semantic measures and {len(profile['dimension_columns'])} trusted dimensions are available for deterministic chart generation in DataPilot.</p></section>")
     if options.include_version_history:
         rows = [[item["version"], item["created_at"], item["operation"], item["description"], item["affected_rows"]] for item in versions["versions"]]
-        sections.append("<section><h2>Version history</h2>" + _table(["Version", "Created", "Operation", "Description", "Affected rows"], rows) + "</section>")
+        sections.append("<section><h2>Version history</h2>" + _table(["Version", "Created", "Operation", "Description", "Affected Rows"], rows) + "</section>")
     generated = datetime.now(timezone.utc).isoformat()
     html = f"""<!doctype html><html><head><meta charset='utf-8'><title>{escape(options.title)}</title><style>body{{font:14px Arial,sans-serif;color:#172033;max-width:1000px;margin:40px auto;padding:0 24px}}h1{{color:#17233f}}section{{margin:28px 0}}table{{border-collapse:collapse;width:100%}}th,td{{padding:9px;border:1px solid #dde1e9;text-align:left}}th{{background:#f4f6fa}}article{{border-left:3px solid #3758f9;padding:2px 14px;margin:12px 0}}.meta{{color:#687184}}.metrics{{background:#f4f7ff;padding:18px;border-radius:8px}}</style></head><body><h1>{escape(options.title)}</h1><p class='meta'>Generated {escape(generated)} from deterministic dataset calculations.</p>{''.join(sections)}</body></html>"""
     return html, round((perf_counter() - started) * 1000, 3)

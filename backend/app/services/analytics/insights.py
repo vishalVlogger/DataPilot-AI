@@ -8,7 +8,7 @@ from app.services.analytics.semantics import preferred_automatic_aggregation
 
 
 def _label(name: str) -> str:
-    return name.replace("_", " ")
+    return name.replace("_", " ").strip().casefold()
 
 
 def _distribution_insights(frame: pd.DataFrame, column: dict[str, Any], max_categories: int) -> list[dict[str, Any]]:
@@ -17,10 +17,18 @@ def _distribution_insights(frame: pd.DataFrame, column: dict[str, Any], max_cate
     total = int(counts.sum()); most, least = counts.index[0], counts.index[-1]; most_count, least_count = int(counts.iloc[0]), int(counts.iloc[-1])
     share = round(most_count / total * 100, 2) if total else 0.0; label = _label(name)
     return [
-        {"type": "performance", "severity": "info", "title": f"{most} is the most common {label}", "description": f"{most} appears in {most_count:,} records and represents {share:.1f}% of non-missing {label} values.", "metric": name, "value": most_count},
-        {"type": "distribution", "severity": "info", "title": f"{most} represents {share:.1f}% of {label} values", "description": f"This percentage is based on row counts, not a sum of an unrelated numeric column.", "metric": name, "value": share},
-        {"type": "distribution", "severity": "info", "title": f"{least} is the least common {label}", "description": f"{least} appears in {least_count:,} record{'s' if least_count != 1 else ''}.", "metric": name, "value": least_count},
+        {"type": "distribution", "severity": "info", "title": f"{most} is the most common {label}", "description": f"{most} appears in {most_count:,} records and represents {share:.1f}% of non-missing {label} values. This distribution is based on row counts.", "metric": name, "dimension": name, "category_value": str(most), "value": most_count},
+        {"type": "distribution", "severity": "info", "title": f"{least} is the least common {label}", "description": f"{least} appears in {least_count:,} record{'s' if least_count != 1 else ''}.", "metric": name, "dimension": name, "category_value": str(least), "value": least_count},
     ]
+
+
+def _deduplicate(insights: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set(); result: list[dict[str, Any]] = []
+    for item in insights:
+        fingerprint = (item.get("type"), item.get("dimension"), item.get("metric"), item.get("aggregation"), item.get("category_value"))
+        if fingerprint in seen: continue
+        seen.add(fingerprint); result.append(item)
+    return result
 
 
 def _measure_by_category(frame: pd.DataFrame, measure: dict[str, Any], category: dict[str, Any]) -> list[dict[str, Any]]:
@@ -33,14 +41,14 @@ def _measure_by_category(frame: pd.DataFrame, measure: dict[str, Any], category:
     label = _label(metric); dimension_label = _label(dimension)
     operation = "total" if aggregation == "sum" else "average" if aggregation == "mean" else aggregation
     insights = [
-        {"type": "performance", "severity": "info", "title": f"{high} has the highest {operation} {label}", "description": f"Among {dimension_label} groups, {high} has a calculated {operation} {label} of {high_value:,.2f}.", "metric": metric, "value": high_value},
-        {"type": "performance", "severity": "info", "title": f"{low} has the lowest {operation} {label}", "description": f"Among {dimension_label} groups, {low} has a calculated {operation} {label} of {low_value:,.2f}.", "metric": metric, "value": low_value},
+        {"type": "performance", "severity": "info", "title": f"{high} has the highest {operation} {label}", "description": f"Among {dimension_label} groups, {high} has a calculated {operation} {label} of {high_value:,.2f}.", "metric": metric, "dimension": dimension, "aggregation": aggregation, "category_value": str(high), "value": high_value},
+        {"type": "performance", "severity": "info", "title": f"{low} has the lowest {operation} {label}", "description": f"Among {dimension_label} groups, {low} has a calculated {operation} {label} of {low_value:,.2f}.", "metric": metric, "dimension": dimension, "aggregation": aggregation, "category_value": str(low), "value": low_value},
     ]
     if aggregation == "sum":
         total = float(grouped.sum()); contribution = 0 if total == 0 else round(high_value / total * 100, 2)
         if contribution >= 50:
-            insights.append({"type": "concentration", "severity": "warning", "title": f"{label} is concentrated in {high}", "description": f"{high} contributes {contribution:.1f}% of total {label} across {dimension_label} groups.", "metric": metric, "value": contribution})
-    return insights
+            insights.append({"type": "concentration", "severity": "warning", "title": f"{label} is concentrated in {high}", "description": f"{high} contributes {contribution:.1f}% of total {label} across {dimension_label} groups.", "metric": metric, "dimension": dimension, "aggregation": aggregation, "category_value": str(high), "value": contribution})
+    return _deduplicate(insights)
 
 
 def generate_insights(frame: pd.DataFrame, dataset_id: str, max_categories: int = 100) -> list[dict[str, Any]]:
@@ -71,12 +79,12 @@ def generate_insights(frame: pd.DataFrame, dataset_id: str, max_categories: int 
         if periods:
             high = max(periods, key=lambda row: row[metric]); low = min(periods, key=lambda row: row[metric]); operation = "total" if aggregation == "sum" else "average"
             insights.extend([
-                {"type": "trend", "severity": "info", "title": f"{high['Period']} had the highest {operation} {_label(metric)}", "description": f"The calculated value was {high[metric]:,.2f}.", "metric": metric, "value": high[metric]},
-                {"type": "trend", "severity": "info", "title": f"{low['Period']} had the lowest {operation} {_label(metric)}", "description": f"The calculated value was {low[metric]:,.2f}.", "metric": metric, "value": low[metric]},
+                {"type": "trend", "severity": "info", "title": f"{high['Period']} had the highest {operation} {_label(metric)}", "description": f"The calculated value was {high[metric]:,.2f}.", "metric": metric, "dimension": date_column, "aggregation": aggregation, "category_value": high["Period"], "value": high[metric]},
+                {"type": "trend", "severity": "info", "title": f"{low['Period']} had the lowest {operation} {_label(metric)}", "description": f"The calculated value was {low[metric]:,.2f}.", "metric": metric, "dimension": date_column, "aggregation": aggregation, "category_value": low["Period"], "value": low[metric]},
             ])
             changes = [row for row in periods if row.get("change_percentage") is not None]
             if changes:
                 growth = max(changes, key=lambda row: row["change_percentage"]); decline = min(changes, key=lambda row: row["change_percentage"])
                 if growth["change_percentage"] > 10: insights.append({"type": "growth", "severity": "info", "title": f"Large growth in {growth['Period']}", "description": f"{_label(metric)} increased {growth['change_percentage']:.1f}% from the previous period.", "metric": metric, "value": growth["change_percentage"]})
                 if decline["change_percentage"] < -10: insights.append({"type": "decline", "severity": "warning", "title": f"Large decline in {decline['Period']}", "description": f"{_label(metric)} declined {abs(decline['change_percentage']):.1f}% from the previous period.", "metric": metric, "value": decline["change_percentage"]})
-    return insights
+    return _deduplicate(insights)

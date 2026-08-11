@@ -44,6 +44,7 @@ class ColumnProfile(BaseModel):
     unique_count: int
     physical_type: Literal["number", "integer", "string", "datetime", "boolean"] = "string"
     semantic_role: Literal["measure", "categorical_dimension", "temporal_dimension", "identifier", "high_cardinality_dimension", "boolean_dimension", "unknown"] = "unknown"
+    temporal_helper: Literal["month", "quarter", "week", "day"] | None = None
     confidence: float = Field(default=0.5, ge=0, le=1)
     allowed_aggregations: list[str] = Field(default_factory=list)
     uniqueness_ratio: float = 0

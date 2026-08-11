@@ -53,7 +53,7 @@ def generate_pdf_report(frame: pd.DataFrame, dataset_id: str, options: ReportReq
             story.append(Paragraph("No data-quality issues were detected by the configured checks.", styles["BodyText"]))
     if options.include_charts: story.extend([Paragraph("Chart summary", styles["Section"]), Paragraph(f"{len(profile['measure_columns'])} semantic measures and {len(profile['dimension_columns'])} trusted dimensions are available for deterministic charts. Interactive chart data remains available in DataPilot AI.", styles["BodyText"])])
     if options.include_version_history:
-        rows = [["Version", "Created", "Operation", "Description", "Rows"]] + [[item["version"], str(item["created_at"])[:19], _display(item["operation"]), _display(item["description"]), item["affected_rows"]] for item in versions["versions"][-20:]]
+        rows = [["Version", "Created", "Operation", "Description", "Affected Rows"]] + [[item["version"], str(item["created_at"])[:19], _display(item["operation"]), _display(item["description"]), item["affected_rows"]] for item in versions["versions"][-20:]]
         story.extend([PageBreak(), Paragraph("Version history", styles["Section"]), Table(rows, repeatRows=1, colWidths=[15 * mm, 37 * mm, 25 * mm, 75 * mm, 18 * mm], style=[("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#17233f")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), .3, colors.HexColor("#ccd2df")), ("FONTSIZE", (0, 0), (-1, -1), 7), ("VALIGN", (0, 0), (-1, -1), "TOP")])])
     try: document.build(story, onFirstPage=_footer, onLaterPages=_footer)
     except Exception as exc:

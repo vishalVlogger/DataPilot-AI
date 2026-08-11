@@ -6,7 +6,7 @@ from app.core.errors import AppError
 from app.schemas.dataset import AnalysisPlan
 from app.services.analytics.executor import execute_plan, validate_plan
 from app.services.analytics.profiler import profile_dataset
-from app.services.analytics.semantics import recommend_chart_type
+from app.services.analytics.semantics import recommend_chart_type, sort_temporal_records, temporal_axis_kind
 
 
 def generate_chart(frame: pd.DataFrame, plan: AnalysisPlan, chart_type: str | None = None, max_rows: int = 100, title: str | None = None, x_axis_label: str | None = None, y_axis_label: str | None = None, show_legend: bool = True) -> dict[str, Any]:
@@ -26,12 +26,19 @@ def generate_chart(frame: pd.DataFrame, plan: AnalysisPlan, chart_type: str | No
             raise AppError("Scatter chart axes must be numeric.", "INVALID_AGGREGATION")
         data = frame[[x_axis, y_axis]].dropna().head(max_rows).to_dict(orient="records")
     else:
-        result = execute_plan(frame, plan)
+        temporal_axis = (
+            plan.operation == "group_and_aggregate"
+            and bool(plan.group_by)
+            and temporal_axis_kind(plan.group_by[0], profile["columns"])
+        )
+        chart_plan = plan.model_copy(update={"limit": max_rows}) if temporal_axis and plan.limit < max_rows else plan
+        result = execute_plan(frame, chart_plan)
         if not isinstance(result, list):
             raise AppError("This query does not produce chartable rows.", "CHART_NOT_SUPPORTED")
         data = result[:max_rows]
         x_axis = "Period" if plan.operation == "trend" else plan.group_by[0]
         y_axis = plan.metric or "Value"
+        if plan.operation != "trend": data = sort_temporal_records(data, x_axis, frame, profile["columns"])
     chart_title = title or f"{y_axis} by {x_axis}"
     drill_down = {"filter_template": {"column": x_axis, "operator": "equals", "value": "{clicked_value}"}, "suggested_grouping": "Choose another categorical column"} if selected_type != "scatter" else None
     return {"type": selected_type, "title": chart_title, "x_axis": x_axis, "y_axis": y_axis, "x_axis_label": x_axis_label, "y_axis_label": y_axis_label, "data": data, "plan": plan, "interpreted_request": chart_title, "show_legend": show_legend, "drill_down": drill_down}

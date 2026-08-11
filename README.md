@@ -137,9 +137,10 @@ Semantic classification combines column names, physical types, uniqueness/cardin
 
 - Measures allow meaningful numeric aggregation; the automatic policy prefers totals for additive metrics and averages for prices, rates, mileage, and similar measures.
 - Temporal dimensions allow grouping, trends, counts, min, and max, but never automatic sums.
+- Numeric calendar helpers such as month, quarter, and week numbers are recognized only when exact names and plausible value ranges agree. Named periods are paired with those helpers for chronological chart ordering.
 - Identifiers allow counts/distinct counts and are not automatic measures.
 - High-cardinality dimensions are excluded from automatic concentration, strongest/weakest, pie-chart, and aggressive category-variant analysis.
-- Categorical/boolean distributions use row counts and explicit most/least-common wording.
+- Categorical/boolean distributions use row counts and one explicit, deduplicated most-common summary plus least-common context.
 
 These same roles are included in Ollama/OpenAI schema context without sending dataset rows. HTML and PDF reports use semantic measures for summaries and semantic-aware automatic insights.
 

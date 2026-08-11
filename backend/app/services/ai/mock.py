@@ -3,7 +3,7 @@ import re
 from typing import Any
 
 from app.core.errors import AppError
-from app.schemas.dataset import AnalysisPlan, DateFilter, FilterCondition, PipelineStep
+from app.schemas.dataset import AnalysisPlan, DateFilter, FilterCondition, PipelineStep, SortRule
 from app.services.ai.base import AIProvider
 from app.services.analytics.semantics import aggregation_allowed
 
@@ -31,7 +31,7 @@ class MockAIProvider(AIProvider):
     async def create_analysis_plan(self, question: str, columns: list[dict[str, Any]]) -> AnalysisPlan:
         names = [item["name"] for item in columns]
         numeric = {item["name"] for item in columns if item.get("semantic_role") == "measure" or ("semantic_role" not in item and item["category"] == "numeric")}
-        dates = {item["name"] for item in columns if item["category"] == "date" or item.get("semantic_role") == "temporal_dimension"}
+        dates = {item["name"] for item in columns if item["category"] == "date" or item.get("physical_type") == "datetime"}
         categorical = {item["name"] for item in columns if item.get("semantic_role") in {"categorical_dimension", "boolean_dimension"} or ("semantic_role" not in item and item["category"] in {"categorical", "boolean"})}
         all_dimensions = categorical | {item["name"] for item in columns if item.get("semantic_role") in {"temporal_dimension", "high_cardinality_dimension", "identifier"}}
         default_metric = next((name for name in names if name in numeric), None)
@@ -125,6 +125,14 @@ class MockAIProvider(AIProvider):
             granularity = next((value for word, value in granularities.items() if word in q), None)
             if not granularity:
                 granularity = next((item for item in ("month", "week", "quarter", "year", "day") if f"by {item}" in q), "month")
+            if not date_column:
+                helper = next((item["name"] for item in columns if item.get("temporal_helper") == granularity), None)
+                display_names = {"month": {"month", "month name", "month label"}, "quarter": {"quarter", "quarter name", "quarter label"}, "week": {"week", "week name", "week label"}}
+                display = next((item["name"] for item in columns if _normalized(item["name"]) in display_names.get(granularity, set()) and item["name"] != helper), None)
+                if helper or display:
+                    groups = [item for item in (display, helper) if item]
+                    sorting = [SortRule(column=helper, direction="asc")] if helper else None
+                    return AnalysisPlan(operation="group_and_aggregate", metric=metric or default_metric, aggregation=aggregation, group_by=groups, sort=sorting, limit=100)
             return AnalysisPlan(operation="trend", metric=metric or default_metric, aggregation=aggregation, date_column=date_column, time_granularity=granularity, limit=100)
 
         if re.search(r"\b(declined|decreased|grew|increased)\b", q) and group and date_column:

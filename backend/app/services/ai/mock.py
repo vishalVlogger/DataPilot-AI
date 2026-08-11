@@ -5,6 +5,7 @@ from typing import Any
 from app.core.errors import AppError
 from app.schemas.dataset import AnalysisPlan, DateFilter, FilterCondition, PipelineStep
 from app.services.ai.base import AIProvider
+from app.services.analytics.semantics import aggregation_allowed
 
 
 def _normalized(text: str) -> str:
@@ -29,19 +30,31 @@ def _find_column(question: str, names: list[str], allowed: set[str] | None = Non
 class MockAIProvider(AIProvider):
     async def create_analysis_plan(self, question: str, columns: list[dict[str, Any]]) -> AnalysisPlan:
         names = [item["name"] for item in columns]
-        numeric = {item["name"] for item in columns if item["category"] == "numeric"}
-        dates = {item["name"] for item in columns if item["category"] == "date"}
-        categorical = {item["name"] for item in columns if item["category"] in {"categorical", "boolean"}}
+        numeric = {item["name"] for item in columns if item.get("semantic_role") == "measure" or ("semantic_role" not in item and item["category"] == "numeric")}
+        dates = {item["name"] for item in columns if item["category"] == "date" or item.get("semantic_role") == "temporal_dimension"}
+        categorical = {item["name"] for item in columns if item.get("semantic_role") in {"categorical_dimension", "boolean_dimension"} or ("semantic_role" not in item and item["category"] in {"categorical", "boolean"})}
+        all_dimensions = categorical | {item["name"] for item in columns if item.get("semantic_role") in {"temporal_dimension", "high_cardinality_dimension", "identifier"}}
         default_metric = next((name for name in names if name in numeric), None)
         default_date = next((name for name in names if name in dates), None)
         q = _normalized(question)
         metric = _find_column(question, names, numeric)
         date_column = _find_column(question, names, dates) or default_date
-        group = _find_column(question, names, categorical)
+        group = _find_column(question, names, all_dimensions)
         if not group:
             question_folded = f" {q.casefold()} "
             group = next((item["name"] for item in columns if item["name"] in categorical and any(len(_normalized(str(value))) >= 2 and f" {_normalized(str(value))} " in question_folded for value in item.get("sample_values", []) if str(value).strip())), None)
         aggregation = "mean" if re.search(r"\b(average|mean)\b", q) else "median" if "median" in q else "min" if re.search(r"\b(minimum|min)\b", q) else "max" if re.search(r"\b(maximum|max)\b", q) else "sum"
+        metric_profile = next((item for item in columns if item["name"] == metric), None)
+        if metric_profile and not aggregation_allowed(metric_profile, aggregation):
+            raise AppError(f"{aggregation} is not meaningful for {metric}.", "SEMANTIC_AGGREGATION_INVALID")
+
+        if group and re.search(r"\b(most common|least common|distribution|frequency|how many (?:per|by|for each))\b", q):
+            return AnalysisPlan(operation="group_and_aggregate", metric=group, aggregation="count", group_by=[group], sort="asc" if "least common" in q else "desc", limit=100)
+
+        temporal_group = next((item for item in columns if item["name"] == group and item.get("semantic_role") == "temporal_dimension" and item.get("physical_type") in {"integer", "number"}), None)
+        if temporal_group and re.search(r"\b(trend|by year|over year)\b", q) and (metric or default_metric):
+            selected_metric = metric or default_metric
+            return AnalysisPlan(operation="group_and_aggregate", metric=selected_metric, aggregation="mean" if "average" not in q and "median" not in q else aggregation, group_by=[group], sort="asc", limit=100)
 
         consecutive_match = re.search(r"(declined|decreased|grew|increased).+?(\d+)\s+consecutive\s+months", q)
         if consecutive_match and group and date_column:

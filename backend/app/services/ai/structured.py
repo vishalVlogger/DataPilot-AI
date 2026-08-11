@@ -8,8 +8,8 @@ from app.schemas.dataset import AnalysisPlan
 
 
 def plan_prompt(question: str, columns: list[dict[str, Any]]) -> str:
-    schema = [{"name": item["name"], "category": item["category"]} for item in columns]
-    return f"Create one safe DataPilot analysis plan as JSON only. Never return SQL or Python. Dataset schema: {json.dumps(schema)}. Question: {question}"
+    schema = [{"name": item["name"], "physical_type": item.get("physical_type", item["category"]), "category": item["category"], "semantic_role": item.get("semantic_role", "unknown"), "allowed_aggregations": item.get("allowed_aggregations", [])} for item in columns]
+    return f"Create one safe, semantically meaningful DataPilot analysis plan as JSON only. Never return SQL or Python. Respect semantic roles and allowed aggregations; never sum temporal dimensions or identifiers. Dataset schema: {json.dumps(schema)}. Question: {question}"
 
 
 def validate_plan_json(content: str) -> AnalysisPlan:

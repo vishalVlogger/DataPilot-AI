@@ -22,17 +22,19 @@ def generate_html_report(frame: pd.DataFrame, dataset_id: str, options: ReportRe
     profile = profile_dataset(frame, dataset_id)
     sections = [f"<section><h2>Dataset overview</h2><div class='metrics'><b>{profile['row_count']:,}</b> rows · <b>{profile['column_count']:,}</b> columns · <b>{profile['missing_values']:,}</b> missing values · <b>{profile['duplicate_rows']:,}</b> duplicates</div></section>"]
     if options.include_profile:
-        numeric_rows = [[item["name"], item.get("sum"), item.get("mean"), item.get("median"), item.get("minimum"), item.get("maximum")] for item in profile["columns"] if item["category"] == "numeric"]
-        sections.append("<section><h2>Numeric summary</h2>" + (_table(["Column", "Sum", "Mean", "Median", "Min", "Max"], numeric_rows) if numeric_rows else "<p>No numeric columns.</p>") + "</section>")
+        semantic_rows = [[item["name"], item["physical_type"], item["semantic_role"].replace("_", " "), f"{item['confidence']:.0%}", ", ".join(item["allowed_aggregations"])] for item in profile["columns"]]
+        measure_rows = [[item["name"], item.get("sum"), item.get("mean"), item.get("median"), item.get("minimum"), item.get("maximum")] for item in profile["columns"] if item["semantic_role"] == "measure"]
+        sections.append("<section><h2>Semantic column profile</h2>" + _table(["Column", "Physical type", "Semantic role", "Confidence", "Allowed aggregations"], semantic_rows) + "</section>")
+        sections.append("<section><h2>Measure summary</h2>" + (_table(["Measure", "Sum", "Mean", "Median", "Min", "Max"], measure_rows) if measure_rows else "<p>No semantic measures were detected.</p>") + "</section>")
     if options.include_insights:
         insights = generate_insights(frame, dataset_id)
         sections.append("<section><h2>Key insights</h2>" + ("".join(f"<article><h3>{escape(item['title'])}</h3><p>{escape(item['description'])}</p></article>" for item in insights) if insights else "<p>No notable insights were detected.</p>") + "</section>")
     if options.include_quality:
         quality = analyze_quality(frame)
-        rows = [[item["issue_type"].replace("_", " ").title(), item.get("column") or "Dataset", item["count"], ", ".join(item["examples"])] for item in quality]
-        sections.append("<section><h2>Data quality</h2>" + (_table(["Issue", "Column", "Count", "Examples"], rows) if rows else "<p>No quality issues were detected.</p>") + "</section>")
+        rows = [[item["issue_type"].replace("_", " ").title(), item.get("column") or "Dataset", item["count"], item["confidence"].title(), item.get("message") or "", ", ".join(item["examples"])] for item in quality]
+        sections.append("<section><h2>Data quality</h2>" + (_table(["Issue", "Column", "Count", "Confidence", "Assessment", "Examples"], rows) if rows else "<p>No quality issues were detected.</p>") + "</section>")
     if options.include_charts:
-        sections.append(f"<section><h2>Chart data summary</h2><p>{len(profile['numeric_columns'])} numeric and {len(profile['categorical_columns'])} categorical columns are available for deterministic chart generation in DataPilot.</p></section>")
+        sections.append(f"<section><h2>Chart data summary</h2><p>{len(profile['measure_columns'])} semantic measures and {len(profile['dimension_columns'])} trusted dimensions are available for deterministic chart generation in DataPilot.</p></section>")
     if options.include_version_history:
         rows = [[item["version"], item["created_at"], item["operation"], item["description"], item["affected_rows"]] for item in versions["versions"]]
         sections.append("<section><h2>Version history</h2>" + _table(["Version", "Created", "Operation", "Description", "Affected rows"], rows) + "</section>")

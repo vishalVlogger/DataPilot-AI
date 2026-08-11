@@ -20,6 +20,11 @@ export type ColumnProfile = {
   missing_count: number;
   missing_percentage: number;
   unique_count: number;
+  physical_type: "number" | "integer" | "string" | "datetime" | "boolean";
+  semantic_role: "measure" | "categorical_dimension" | "temporal_dimension" | "identifier" | "high_cardinality_dimension" | "boolean_dimension" | "unknown";
+  confidence: number;
+  allowed_aggregations: string[];
+  uniqueness_ratio: number;
   minimum?: string | number | null;
   maximum?: string | number | null;
   mean?: number | null;
@@ -34,6 +39,8 @@ export type DatasetProfile = {
   numeric_columns: string[];
   categorical_columns: string[];
   date_columns: string[];
+  measure_columns: string[];
+  dimension_columns: string[];
   missing_values: number;
   duplicate_rows: number;
   date_range: { minimum: string; maximum: string } | null;
@@ -50,7 +57,7 @@ export type AskResponse = {
 };
 
 export type Insight = { type: string; severity: "info" | "warning" | "critical"; title: string; description: string; metric?: string | null; value?: number | string | null };
-export type QualityIssue = { issue_type: string; column: string | null; count: number; examples: string[]; severity: "info" | "warning" | "critical" };
+export type QualityIssue = { issue_type: string; column: string | null; count: number; examples: string[]; severity: "info" | "warning" | "critical"; confidence: "low" | "medium" | "high"; message?: string | null };
 export type ChartType = "bar" | "column" | "line" | "pie" | "scatter";
 export type ChartResponse = { type: ChartType; title: string; x_axis: string; y_axis: string; x_axis_label?: string | null; y_axis_label?: string | null; show_legend?: boolean; drill_down?: Record<string, unknown> | null; data: Record<string, string | number | null>[]; plan: Record<string, unknown>; interpreted_request: string };
 export type CleaningType = "remove_duplicates" | "trim_whitespace" | "standardize_lowercase" | "standardize_uppercase" | "standardize_titlecase" | "remove_missing_rows" | "fill_missing_mean" | "fill_missing_median" | "fill_missing_value";

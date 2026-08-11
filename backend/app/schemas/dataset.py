@@ -35,6 +35,11 @@ class ColumnProfile(BaseModel):
     missing_count: int
     missing_percentage: float
     unique_count: int
+    physical_type: Literal["number", "integer", "string", "datetime", "boolean"] = "string"
+    semantic_role: Literal["measure", "categorical_dimension", "temporal_dimension", "identifier", "high_cardinality_dimension", "boolean_dimension", "unknown"] = "unknown"
+    confidence: float = Field(default=0.5, ge=0, le=1)
+    allowed_aggregations: list[str] = Field(default_factory=list)
+    uniqueness_ratio: float = 0
     minimum: Any | None = None
     maximum: Any | None = None
     mean: float | None = None
@@ -51,6 +56,8 @@ class DatasetProfile(BaseModel):
     numeric_columns: list[str]
     categorical_columns: list[str]
     date_columns: list[str]
+    measure_columns: list[str] = Field(default_factory=list)
+    dimension_columns: list[str] = Field(default_factory=list)
     missing_values: int
     duplicate_rows: int
     date_range: dict[str, str] | None = None
@@ -214,6 +221,8 @@ class QualityIssue(BaseModel):
     count: int
     examples: list[str] = Field(default_factory=list)
     severity: Literal["info", "warning", "critical"] = "warning"
+    confidence: Literal["low", "medium", "high"] = "medium"
+    message: str | None = None
 
 
 CleaningType = Literal[

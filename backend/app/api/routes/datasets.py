@@ -21,6 +21,7 @@ from app.services.analytics.executor import validate_plan
 from app.services.analytics.engines import ExecutionEngineSelector
 from app.services.analytics.insights import generate_insights
 from app.services.analytics.profiler import profile_dataset
+from app.services.analytics.semantics import recommend_chart_type, validate_semantic_plan
 from app.services.analytics.quality import analyze_quality
 from app.services.cleaning.service import audit_entries, clean_frame
 from app.services.datasets.parser import inspect_sheets, parse_dataset
@@ -49,6 +50,7 @@ def _validate_profile_plan(profile: dict, plan) -> None:
     missing = sorted({name for name in referenced if name and name not in columns})
     if missing:
         raise AppError(f"Unknown column(s): {', '.join(missing)}.", "INVALID_QUERY_PLAN")
+    validate_semantic_plan(profile["columns"], plan)
 
 
 def _record_run(dataset_id: str, requested_session_id: str | None, version: int, question: str | None, plan, result, engine: str, duration_ms: float, explanation: str | None = None) -> tuple[str, str]:
@@ -106,7 +108,7 @@ async def get_dataset(dataset_id: str) -> DatasetMetadata:
 async def get_profile(dataset_id: str) -> DatasetProfile:
     store = storage(); metadata = store.load_metadata(dataset_id)
     profile = metadata.get("profile_summary")
-    if not profile:
+    if not profile or any("semantic_role" not in item for item in profile.get("columns", [])):
         profile = profile_dataset(store.load_frame(dataset_id), dataset_id); store.update_profile(dataset_id, profile)
     return DatasetProfile.model_validate(profile)
 
@@ -116,7 +118,7 @@ async def ask_dataset(dataset_id: str, request: AskRequest) -> AskResponse:
     settings = get_settings()
     load_started = perf_counter(); store = storage(); metadata_record = store.load_metadata(dataset_id)
     profile = metadata_record.get("profile_summary")
-    if not profile:
+    if not profile or any("semantic_role" not in item for item in profile.get("columns", [])):
         frame_for_profile = store.load_frame(dataset_id); profile = profile_dataset(frame_for_profile, dataset_id); store.update_profile(dataset_id, profile)
     load_ms = round((perf_counter() - load_started) * 1000, 3)
     mock = MockAIProvider()
@@ -145,7 +147,7 @@ async def ask_dataset(dataset_id: str, request: AskRequest) -> AskResponse:
     except Exception:
         fallback_used = True
         answer = await mock.explain_result(request.question, plan, result)
-    suggestion = ChartSuggestion(type="line" if plan.operation == "trend" else "bar") if isinstance(result, list) and result else None
+    suggestion = ChartSuggestion(type=recommend_chart_type(profile["columns"], plan)) if isinstance(result, list) and result else None
     explanation = {"metric": plan.metric, "aggregation": plan.aggregation, "grouped_by": plan.group_by, "filters": [item.model_dump() for item in plan.filters], "date_filter": plan.date_filter.model_dump() if plan.date_filter else None}
     session_id, run_id = _record_run(dataset_id, request.session_id, version, request.question, plan, result, engine_result.engine, engine_result.duration_ms, answer)
     metadata = {"execution_engine": engine_result.engine, "dataset_version": version, "load_ms": load_ms, "execution_ms": engine_result.duration_ms, "ai_interpretation_ms": interpretation_ms, "provider_fallback": fallback_used, "cached": cached is not None, "session_id": session_id, "run_id": run_id}

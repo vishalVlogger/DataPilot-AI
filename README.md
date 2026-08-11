@@ -2,6 +2,8 @@
 
 DataPilot AI is a working local-first application for uploading CSV/Excel datasets, profiling and versioning their contents, asking deterministic natural-language questions, discovering insights, generating charts, and downloading analysis reports. Calculations run through validated Pandas or DuckDB engines; AI providers only interpret intent and explain calculated results.
 
+Profiles include semantic column roles in addition to physical dtypes. Measures, categorical/temporal/boolean dimensions, identifiers, and high-cardinality dimensions receive centralized aggregation and automatic-analysis policies so mathematically valid but meaningless calculations—such as summing a year or customer ID—are rejected.
+
 ## Architecture
 
 - `backend/app/api/routes`: small HTTP route handlers
@@ -120,6 +122,18 @@ DuckDB natively executes validated filtering, sorting, aggregation, ranking, con
 
 Charts support bar, column, line, pie, and scatter output using Recharts. Chart values always come from the analytics executor.
 
+### Semantic analysis
+
+Semantic classification combines column names, physical types, uniqueness/cardinality, value patterns, plausible year ranges, and numeric variance. The profile exposes each column's role, confidence, uniqueness ratio, and allowed aggregations. The default UI keeps this under the expandable “Technical semantic profile” section.
+
+- Measures allow meaningful numeric aggregation; the automatic policy prefers totals for additive metrics and averages for prices, rates, mileage, and similar measures.
+- Temporal dimensions allow grouping, trends, counts, min, and max, but never automatic sums.
+- Identifiers allow counts/distinct counts and are not automatic measures.
+- High-cardinality dimensions are excluded from automatic concentration, strongest/weakest, pie-chart, and aggressive category-variant analysis.
+- Categorical/boolean distributions use row counts and explicit most/least-common wording.
+
+These same roles are included in Ollama/OpenAI schema context without sending dataset rows. HTML and PDF reports use semantic measures for summaries and semantic-aware automatic insights.
+
 Cleaning supports duplicate removal, whitespace trimming, lower/upper/title case, missing-row removal, numeric mean/median fill, and explicit-value fill. Preview does not mutate the dataset. Apply requires explicit confirmation and records an audit entry.
 
 ## Optional AI providers
@@ -166,3 +180,4 @@ Legacy Pickle datasets are migrated lazily on first access. Their existing files
 - Dataset contents and cleaning audit logs use local filesystem storage; an object-storage backend is a future extension of the storage interface.
 - Each version is a full Parquet snapshot; delta versions and distributed job workers are future work.
 - CSV/Excel ingestion still parses once with Pandas before normalization to Parquet.
+- Semantic classification is deterministic and heuristic. Domain-specific concepts with ambiguous names may still need future user overrides or a semantic-metadata editor.

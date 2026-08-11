@@ -19,6 +19,7 @@ from app.schemas.dataset import (
     SessionResponse,
 )
 from app.services.analytics.engines import ExecutionEngineSelector
+from app.services.analytics.profiler import profile_dataset
 from app.services.cache import analysis_cache
 from app.services.datasets.storage import DatasetStorage
 
@@ -123,6 +124,8 @@ async def run_saved_analysis(analysis_id: str) -> dict:
 @router.post("/datasets/{dataset_id}/drilldown", response_model=DrillDownResponse)
 async def drill_down(dataset_id: str, request: DrillDownRequest) -> DrillDownResponse:
     store = storage(); metadata = store.load_metadata(dataset_id); profile = metadata.get("profile_summary") or {}
+    if not profile or any("semantic_role" not in item for item in profile.get("columns", [])):
+        profile = profile_dataset(store.load_frame(dataset_id), dataset_id); store.update_profile(dataset_id, profile)
     columns = {item["name"] for item in profile.get("columns", [])}
     if request.clicked_dimension not in columns or request.next_dimension not in columns:
         raise AppError("The drilldown dimension is not part of this dataset.", "INVALID_QUERY_PLAN")

@@ -91,7 +91,8 @@ class DuckDBExecutionEngine(AnalyticsExecutionEngine):
         aggregates = {"sum": "SUM", "mean": "AVG", "min": "MIN", "max": "MAX", "count": "COUNT", "median": "MEDIAN"}
         aggregate = aggregates[plan.aggregation or "sum"]
         if plan.operation == "aggregate":
-            value = connection.execute(f"SELECT {aggregate}(TRY_CAST({metric} AS DOUBLE)) FROM dataset{where}", params).fetchone()[0]
+            expression = "COUNT(*)" if aggregate == "COUNT" else f"{aggregate}(TRY_CAST({metric} AS DOUBLE))"
+            value = connection.execute(f"SELECT {expression} FROM dataset{where}", params).fetchone()[0]
             return {"metric": plan.metric, "aggregation": plan.aggregation or "sum", "value": value}
         if plan.operation == "trend":
             grains = {"day": "day", "week": "week", "month": "month", "quarter": "quarter", "year": "year"}
@@ -110,7 +111,7 @@ class DuckDBExecutionEngine(AnalyticsExecutionEngine):
             return {"current_period": current["Period"], "previous_period": previous["Period"], "current_value": current_value, "previous_value": previous_value, "change": change, "change_percentage": None if previous_value == 0 else round(change / previous_value * 100, 2)}
         groups = plan.group_by
         group_sql = ", ".join(_identifier(group) for group in groups)
-        value_expression = f"VAR_SAMP(TRY_CAST({metric} AS DOUBLE))" if plan.operation == "variance" else f"{aggregate}(TRY_CAST({metric} AS DOUBLE))"
+        value_expression = f"VAR_SAMP(TRY_CAST({metric} AS DOUBLE))" if plan.operation == "variance" else "COUNT(*)" if aggregate == "COUNT" else f"{aggregate}(TRY_CAST({metric} AS DOUBLE))"
         base = f"SELECT {group_sql}, {value_expression} AS {metric} FROM dataset{where} GROUP BY {group_sql}"
         if plan.operation in {"percent_of_total", "contribution"}:
             sql = f"WITH grouped AS ({base}) SELECT *, CASE WHEN SUM({metric}) OVER () = 0 THEN 0 ELSE ROUND({metric} / SUM({metric}) OVER () * 100, 2) END AS percentage_of_total FROM grouped"

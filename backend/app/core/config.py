@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     max_chart_rows: int = 100
     max_category_analysis: int = 100
     max_quality_examples: int = 5
+    semantic_year_min: int = 1900
+    semantic_year_tolerance: int = 2
+    high_cardinality_min_unique: int = 5
+    high_cardinality_ratio: float = 0.5
     pandas_row_threshold: int = 50_000
     duckdb_row_threshold: int = 50_000
     max_analysis_rows: int = 1_000_000

@@ -14,8 +14,8 @@ def test_insights_include_performance_growth_decline_and_quality() -> None:
     insights = generate_insights(frame, "id")
     types = {item["type"] for item in insights}
     assert {"performance", "growth", "decline", "data_quality"}.issubset(types)
-    assert any("West" in item["title"] and "strongest" in item["title"] for item in insights)
-    assert any("North" in item["title"] and "weakest" in item["title"] for item in insights)
+    assert any("West" in item["title"] and "most common" in item["title"] for item in insights)
+    assert any("North" in item["title"] and "least common" in item["title"] for item in insights)
     assert any(item["title"] == "Duplicate rows detected" for item in insights)
 
 

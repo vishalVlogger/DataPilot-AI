@@ -6,6 +6,8 @@ import calendar
 from app.core.errors import AppError
 from app.schemas.dataset import AnalysisPlan, FilterCondition
 from app.utils.dates import relative_date_range
+from app.services.analytics.profiler import profile_dataset
+from app.services.analytics.semantics import validate_semantic_plan
 
 NUMERIC_AGGREGATIONS = {"sum", "mean", "min", "max", "median"}
 DATE_OPERATIONS = {"trend", "compare_periods", "running_total", "percentage_change", "moving_average", "consecutive_growth", "consecutive_decline"}
@@ -26,6 +28,7 @@ def validate_plan(frame: pd.DataFrame, plan: AnalysisPlan) -> None:
     missing = [column for column in referenced if column not in columns]
     if missing:
         raise AppError(f"Column '{missing[0]}' was not found.", "COLUMN_NOT_FOUND")
+    validate_semantic_plan(profile_dataset(frame, "validation")["columns"], plan)
     needs_metric = plan.operation not in {"count", "filter", "sort", "distinct_count", "pipeline"}
     if needs_metric and not plan.metric:
         raise AppError("This operation requires a metric column.", "INVALID_QUERY_PLAN")

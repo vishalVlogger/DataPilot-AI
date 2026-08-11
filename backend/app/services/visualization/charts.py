@@ -5,13 +5,19 @@ import pandas as pd
 from app.core.errors import AppError
 from app.schemas.dataset import AnalysisPlan
 from app.services.analytics.executor import execute_plan, validate_plan
+from app.services.analytics.profiler import profile_dataset
+from app.services.analytics.semantics import recommend_chart_type
 
 
 def generate_chart(frame: pd.DataFrame, plan: AnalysisPlan, chart_type: str | None = None, max_rows: int = 100, title: str | None = None, x_axis_label: str | None = None, y_axis_label: str | None = None, show_legend: bool = True) -> dict[str, Any]:
     validate_plan(frame, plan)
-    selected_type = chart_type or ("line" if plan.operation == "trend" else "bar")
+    profile = profile_dataset(frame, "chart")
+    by_name = {item["name"]: item for item in profile["columns"]}
+    selected_type = chart_type or recommend_chart_type(profile["columns"], plan)
     if selected_type not in {"bar", "column", "line", "pie", "scatter"}:
         raise AppError("The requested chart type is not supported.", "CHART_NOT_SUPPORTED")
+    if selected_type == "pie" and plan.group_by and by_name.get(plan.group_by[0], {}).get("semantic_role") in {"identifier", "high_cardinality_dimension"}:
+        raise AppError("Pie charts are not suitable for identifier or high-cardinality dimensions.", "CHART_NOT_SUPPORTED")
     if selected_type == "scatter":
         if not plan.metric or not plan.group_by:
             raise AppError("Scatter charts require two numeric columns.", "INVALID_QUERY_PLAN")

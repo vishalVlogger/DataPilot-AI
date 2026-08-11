@@ -29,7 +29,7 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
 
 async function parse<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) { const context={request_id:payload.request_id as string|undefined,route:new URL(response.url).pathname,error_code:payload.error_code as string|undefined};if(typeof window!=="undefined")sessionStorage.setItem("datapilot_last_error",JSON.stringify(context));throw new Error(`${payload.message ?? "Request failed"}${payload.request_id?` Reference ID: ${payload.request_id}`:""}`); }
+  if (!response.ok) { const context={request_id:payload.request_id as string|undefined,route:new URL(response.url).pathname,error_code:payload.error_code as string|undefined,page:typeof window!=="undefined"?window.location.pathname:undefined,occurred_at:Date.now()};if(typeof window!=="undefined")sessionStorage.setItem("datapilot_last_error",JSON.stringify(context));throw new Error(`${payload.message ?? "Request failed"}${payload.request_id?` Reference ID: ${payload.request_id}`:""}`); }
   return payload as T;
 }
 

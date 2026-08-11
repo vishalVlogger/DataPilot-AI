@@ -27,8 +27,23 @@ def get_engine() -> Engine:
 def init_database() -> None:
     try:
         Base.metadata.create_all(get_engine())
+        _ensure_legacy_tenant()
     except Exception as exc:
         raise AppError("Metadata database is unavailable.", "DATABASE_UNAVAILABLE", 503) from exc
+
+
+def _ensure_legacy_tenant() -> None:
+    from app.models import User, Workspace, WorkspaceMember
+    settings = get_settings(); factory = sessionmaker(bind=get_engine(), expire_on_commit=False)
+    with factory() as session:
+        if session.get(User, settings.legacy_user_id) is None:
+            session.add(User(id=settings.legacy_user_id, email="legacy-local@datapilot.invalid", normalized_email="legacy-local@datapilot.invalid", password_hash="!", display_name="Legacy Local User", is_active=False))
+        if session.get(Workspace, settings.legacy_workspace_id) is None:
+            session.add(Workspace(id=settings.legacy_workspace_id, name="Legacy Local Workspace", slug=f"legacy-local-{settings.legacy_workspace_id[-8:]}", owner_user_id=settings.legacy_user_id, plan_code=settings.default_plan))
+        session.flush()
+        if session.get(WorkspaceMember, (settings.legacy_workspace_id, settings.legacy_user_id)) is None:
+            session.add(WorkspaceMember(workspace_id=settings.legacy_workspace_id, user_id=settings.legacy_user_id, role="owner"))
+        session.commit()
 
 
 def session_scope() -> Session:

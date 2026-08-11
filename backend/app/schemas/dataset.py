@@ -26,6 +26,13 @@ class DatasetMetadata(BaseModel):
     storage_format: str = "parquet"
     status: str = "ready"
     last_analyzed_at: datetime | None = None
+    workspace_id: str | None = None
+    uploader_user_id: str | None = None
+    storage_bytes: int = 0
+
+
+class DatasetRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
 
 
 class ColumnProfile(BaseModel):

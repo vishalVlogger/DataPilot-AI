@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "DataPilot AI"
     environment: str = "development"
+    app_env: str = "development"
     ai_provider: str = "mock"
     max_upload_size_mb: int = 25
     max_rows: int = 250_000
@@ -29,6 +30,15 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./datapilot.db"
     enable_pdf_reports: bool = True
     background_jobs_enabled: bool = True
+    secret_key: str = "development-only-change-me-32-bytes-minimum"
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 14
+    refresh_cookie_name: str = "datapilot_refresh"
+    default_plan: str = "free"
+    frontend_url: str = "http://localhost:3000"
+    rate_limit_enabled: bool = True
+    legacy_workspace_id: str = "00000000-0000-0000-0000-000000000001"
+    legacy_user_id: str = "00000000-0000-0000-0000-000000000001"
     cors_origins: str = "http://localhost:3000"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
@@ -46,6 +56,10 @@ class Settings(BaseSettings):
     @property
     def storage_root(self) -> Path:
         return self.dataset_storage_root or self.data_storage_dir
+
+    @property
+    def secure_cookies(self) -> bool:
+        return (self.app_env or self.environment).lower() in {"production", "staging"}
 
 
 @lru_cache

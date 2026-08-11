@@ -1,0 +1,11 @@
+.git
+.env
+**/.env.local
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+backend/.data
+backend/datapilot.db
+frontend/node_modules
+frontend/.next
+*.log

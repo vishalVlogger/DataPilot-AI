@@ -6,13 +6,13 @@ import logging
 from fastapi.encoders import jsonable_encoder
 import pandas as pd
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from app.core.config import get_settings
 from app.schemas.dataset import (
     AnalyzeRequest, AnalysisResponse, AskRequest, AskResponse, ChartRequest, ChartResponse, ChartSuggestion,
-    CleaningApplyResponse, CleaningPreview, CleaningRequest, DatasetMetadata,
+    CleaningApplyResponse, CleaningPreview, CleaningRequest, DatasetMetadata, DatasetRenameRequest,
     DatasetProfile, Insight, InspectResponse, QualityIssue, ReportRequest, SheetInfo, VersionListResponse,
 )
 from app.services.ai import get_ai_provider
@@ -34,8 +34,11 @@ from app.services.jobs import JobManager
 from app.core.database import session_scope
 from app.repositories import AnalysisRunRepository, AnalysisSessionRepository, DatasetRepository
 from app.services.visualization.charts import generate_chart
+from app.core.auth import current_principal, require_auth
+from app.core.rate_limit import rate_limiter
+from app.services.saas import UsageService
 
-router = APIRouter(prefix="/datasets")
+router = APIRouter(prefix="/datasets", dependencies=[Depends(require_auth)])
 logger = logging.getLogger("datapilot.analytics")
 
 
@@ -54,49 +57,64 @@ def _validate_profile_plan(profile: dict, plan) -> None:
 
 
 def _record_run(dataset_id: str, requested_session_id: str | None, version: int, question: str | None, plan, result, engine: str, duration_ms: float, explanation: str | None = None) -> tuple[str, str]:
+    principal = current_principal()
     summary = result[:50] if isinstance(result, list) else result
     with session_scope() as session:
-        sessions = AnalysisSessionRepository(session)
+        sessions = AnalysisSessionRepository(session, principal.workspace_id)
         if requested_session_id:
             session_record = sessions.get(requested_session_id)
             if session_record["dataset_id"] != dataset_id:
                 from app.core.errors import AppError
                 raise AppError("The analysis session belongs to another dataset.", "SESSION_NOT_FOUND", 404)
         else:
-            session_record = sessions.create(dataset_id, version, (question or "Analysis session")[:255])
+            session_record = sessions.create(dataset_id, version, (question or "Analysis session")[:255], principal.user_id)
         sessions.touch(session_record["id"], version)
-        run = AnalysisRunRepository(session).create(
+        run = AnalysisRunRepository(session, principal.workspace_id).create(
+            user_id=principal.user_id,
             session_id=session_record["id"], dataset_id=dataset_id, dataset_version=version,
             question=question, query_plan=plan.model_dump(mode="json"), result_summary=jsonable_encoder(summary),
             execution_engine=engine, execution_duration_ms=duration_ms, ai_provider=get_settings().ai_provider,
             ai_explanation=explanation, success=True,
         )
-        DatasetRepository(session).mark_analyzed(dataset_id)
+        DatasetRepository(session, principal.workspace_id).mark_analyzed(dataset_id)
+    usage = UsageService(principal.workspace_id); usage.record("analysis", 1, principal.user_id, dataset_id); usage.activity("analysis_executed", principal.user_id, dataset_id, {"operation": plan.operation})
     return session_record["id"], run["id"]
 
 
 def storage() -> DatasetStorage:
-    settings = get_settings()
-    return DatasetStorage(settings.storage_root, settings.parquet_compression)
+    settings = get_settings(); principal = current_principal()
+    return DatasetStorage(settings.storage_root, settings.parquet_compression, principal.workspace_id, principal.user_id)
 
 
 @router.post("/inspect", response_model=InspectResponse)
 async def inspect_dataset(file: UploadFile = File(...)) -> InspectResponse:
-    settings = get_settings()
-    content = await file.read(settings.max_upload_size_mb * 1024 * 1024 + 1)
-    sheets = inspect_sheets(file.filename or "upload", content, settings.max_upload_size_mb)
+    settings = get_settings(); principal = current_principal(); _, plan = UsageService(principal.workspace_id).plan()
+    content = await file.read(plan.upload_bytes + 1)
+    sheets = inspect_sheets(file.filename or "upload", content, plan.upload_bytes // 1024 // 1024)
     return InspectResponse(filename=Path(file.filename or "upload").name, sheets=[SheetInfo(name=name) for name in sheets])
 
 
 @router.post("/upload", response_model=DatasetMetadata, status_code=201)
 async def upload_dataset(file: UploadFile = File(...), sheet_name: str | None = Form(default=None), header_row: int = Form(default=0)) -> DatasetMetadata:
-    settings = get_settings()
-    content = await file.read(settings.max_upload_size_mb * 1024 * 1024 + 1)
-    frame, source_type, selected_sheet = parse_dataset(file.filename or "upload", content, settings.max_upload_size_mb, settings.max_rows, settings.max_columns, sheet_name, header_row)
+    settings = get_settings(); principal = current_principal(); usage = UsageService(principal.workspace_id); _, plan = usage.plan(); rate_limiter.check(f"upload:{principal.user_id}", 20, 60)
+    content = await file.read(plan.upload_bytes + 1); usage.enforce_upload(len(content))
+    frame, source_type, selected_sheet = parse_dataset(file.filename or "upload", content, plan.upload_bytes // 1024 // 1024, plan.rows_per_dataset, settings.max_columns, sheet_name, header_row); usage.enforce_upload(len(content), len(frame))
     store = storage()
     metadata = store.save(frame, file.filename or "upload", source_type, selected_sheet, content)
     store.update_profile(metadata["id"], profile_dataset(frame, metadata["id"]))
+    usage.record("dataset_upload", 1, principal.user_id, metadata["id"], {"source_type": source_type}); usage.record("rows_uploaded", len(frame), principal.user_id, metadata["id"]); usage.record("storage_consumed", metadata["storage_bytes"], principal.user_id, metadata["id"]); usage.activity("dataset_uploaded", principal.user_id, metadata["id"], {"name": metadata["name"], "rows": len(frame)})
     return DatasetMetadata.model_validate(metadata)
+
+
+@router.patch("/{dataset_id}", response_model=DatasetMetadata)
+async def rename_dataset(dataset_id: str, request: DatasetRenameRequest) -> DatasetMetadata:
+    principal = current_principal(); name = Path(request.name.strip()).name
+    if name in {"", ".", ".."}:
+        from app.core.errors import AppError
+        raise AppError("Dataset name is required.", "VALIDATION_ERROR", 422)
+    with session_scope() as session: DatasetRepository(session, principal.workspace_id).rename(dataset_id, name)
+    UsageService(principal.workspace_id).activity("dataset_renamed", principal.user_id, dataset_id, {"name": name})
+    return DatasetMetadata.model_validate(storage().load_metadata(dataset_id))
 
 
 @router.get("/{dataset_id}", response_model=DatasetMetadata)
@@ -115,7 +133,7 @@ async def get_profile(dataset_id: str) -> DatasetProfile:
 
 @router.post("/{dataset_id}/ask", response_model=AskResponse)
 async def ask_dataset(dataset_id: str, request: AskRequest) -> AskResponse:
-    settings = get_settings()
+    settings = get_settings(); principal = current_principal(); usage = UsageService(principal.workspace_id); usage.enforce_analysis(); usage.enforce_ai(); rate_limiter.check(f"ask:{principal.user_id}", 30, 60)
     load_started = perf_counter(); store = storage(); metadata_record = store.load_metadata(dataset_id)
     profile = metadata_record.get("profile_summary")
     if not profile or any("semantic_role" not in item for item in profile.get("columns", [])):
@@ -152,12 +170,14 @@ async def ask_dataset(dataset_id: str, request: AskRequest) -> AskResponse:
     session_id, run_id = _record_run(dataset_id, request.session_id, version, request.question, plan, result, engine_result.engine, engine_result.duration_ms, answer)
     metadata = {"execution_engine": engine_result.engine, "dataset_version": version, "load_ms": load_ms, "execution_ms": engine_result.duration_ms, "ai_interpretation_ms": interpretation_ms, "provider_fallback": fallback_used, "cached": cached is not None, "session_id": session_id, "run_id": run_id}
     logger.info("analysis_complete", extra={"dataset_id": dataset_id, **metadata})
+    usage.record("ai_request", 1, principal.user_id, dataset_id)
+    usage.record("ask_data", 1, principal.user_id, dataset_id)
     return AskResponse(question=request.question, plan=plan, answer=answer, result=result, chart_suggestion=suggestion, explanation=explanation, metadata=metadata)
 
 
 @router.post("/{dataset_id}/analyze", response_model=AnalysisResponse)
 async def analyze_dataset(dataset_id: str, request: AnalyzeRequest) -> AnalysisResponse:
-    settings = get_settings(); store = storage(); metadata = store.load_metadata(dataset_id); engine = ExecutionEngineSelector(settings).select(metadata["rows"]); source = store.get_dataset_path(dataset_id) if engine.name == "duckdb" else store.load_frame(dataset_id)
+    settings = get_settings(); principal = current_principal(); UsageService(principal.workspace_id).enforce_analysis(); store = storage(); metadata = store.load_metadata(dataset_id); engine = ExecutionEngineSelector(settings).select(metadata["rows"]); source = store.get_dataset_path(dataset_id) if engine.name == "duckdb" else store.load_frame(dataset_id)
     engine_result = await engine.execute_plan(source, request.plan)
     explanation = {"metric": request.plan.metric, "aggregation": request.plan.aggregation, "grouped_by": request.plan.group_by, "filters": [item.model_dump() for item in request.plan.filters], "date_filter": request.plan.date_filter.model_dump() if request.plan.date_filter else None}
     version = store.current_version(dataset_id)
@@ -210,20 +230,22 @@ async def apply_cleaning(dataset_id: str, request: CleaningRequest) -> CleaningA
     if not request.confirmed:
         from app.core.errors import AppError
         raise AppError("Cleaning changes must be previewed and explicitly confirmed.", "CLEANING_APPLY_FAILED")
-    store = storage()
+    store = storage(); principal = current_principal(); usage = UsageService(principal.workspace_id)
     cleaned, preview = clean_frame(store.load_frame(dataset_id), request.operations)
     description = "; ".join(f"{item.type}{f' on {item.column}' if item.column else ''}" for item in request.operations)
-    version = store.create_version(dataset_id, cleaned, "clean", description, preview.affected_rows)
+    usage.enforce_storage_growth(int(cleaned.memory_usage(deep=True).sum())); version = store.create_version(dataset_id, cleaned, "clean", description, preview.affected_rows)
     audit = store.append_audit(dataset_id, audit_entries(preview))
     analysis_cache.invalidate_dataset(dataset_id)
     profile = profile_dataset(cleaned, dataset_id); store.update_profile(dataset_id, profile)
+    usage.activity("dataset_cleaned", principal.user_id, dataset_id, {"version": version, "affected_rows": preview.affected_rows})
     return CleaningApplyResponse(preview=preview, audit_entries=audit, profile=DatasetProfile.model_validate(profile), version=version)
 
 
 @router.post("/{dataset_id}/reset", response_model=DatasetProfile)
 async def reset_dataset(dataset_id: str) -> DatasetProfile:
-    store = storage(); frame = store.reset(dataset_id); profile = profile_dataset(frame, dataset_id); store.update_profile(dataset_id, profile)
+    principal = current_principal(); store = storage(); source = store.load_version(dataset_id, 0); usage = UsageService(principal.workspace_id); usage.enforce_storage_growth(int(source.memory_usage(deep=True).sum())); frame = store.reset(dataset_id); profile = profile_dataset(frame, dataset_id); store.update_profile(dataset_id, profile)
     analysis_cache.invalidate_dataset(dataset_id)
+    usage.activity("dataset_restored", principal.user_id, dataset_id, {"source_version": 0, "operation": "reset"})
     return DatasetProfile.model_validate(profile)
 
 
@@ -234,16 +256,18 @@ async def get_versions(dataset_id: str) -> VersionListResponse:
 
 @router.post("/{dataset_id}/versions/{version}/restore", response_model=CleaningApplyResponse)
 async def restore_version(dataset_id: str, version: int) -> CleaningApplyResponse:
-    store = storage(); frame, new_version = store.restore_version(dataset_id, version); analysis_cache.invalidate_dataset(dataset_id)
+    store = storage(); principal = current_principal(); usage = UsageService(principal.workspace_id); source = store.load_version(dataset_id, version); usage.enforce_storage_growth(int(source.memory_usage(deep=True).sum())); frame, new_version = store.restore_version(dataset_id, version); analysis_cache.invalidate_dataset(dataset_id)
     from app.schemas.dataset import CleaningPreview
     preview = CleaningPreview(changes=[], affected_rows=0, affected_cells=0, resulting_rows=len(frame), warnings=[f"Restored version {version} as new version {new_version}."])
     profile = profile_dataset(frame, dataset_id); store.update_profile(dataset_id, profile)
+    usage.activity("dataset_restored", principal.user_id, dataset_id, {"source_version": version, "version": new_version})
     return CleaningApplyResponse(preview=preview, audit_entries=store.load_audit(dataset_id), profile=DatasetProfile.model_validate(profile), version=new_version)
 
 
 @router.post("/{dataset_id}/report")
 async def create_report(dataset_id: str, request: ReportRequest) -> Response:
-    settings = get_settings(); store = storage(); store.load_metadata(dataset_id)
+    settings = get_settings(); principal = current_principal(); usage = UsageService(principal.workspace_id); usage.enforce_report(); rate_limiter.check(f"report:{principal.user_id}", 10, 60); store = storage(); store.load_metadata(dataset_id)
+    usage.record("report", 1, principal.user_id, dataset_id); usage.activity("report_generated", principal.user_id, dataset_id, {"format": request.format, "async": request.async_job})
     if request.async_job and settings.background_jobs_enabled:
         job = JobManager().create_report_job(dataset_id, request, store)
         return JSONResponse(content={"job_id": job["id"], "status": job["status"]}, status_code=202)
@@ -267,7 +291,7 @@ async def export_dataset(
     format: str = Query(default="csv", pattern="^(csv|xlsx)$"),
     version: str = Query(default="current", pattern="^(current|original)$"),
 ) -> StreamingResponse:
-    store = storage()
+    store = storage(); principal = current_principal(); UsageService(principal.workspace_id).record("export", 1, principal.user_id, dataset_id, {"format": format, "version": version})
     frame = store.load_original_frame(dataset_id) if version == "original" else store.load_frame(dataset_id)
     metadata = store.load_metadata(dataset_id)
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(metadata["name"]).stem).strip("_") or "dataset"

@@ -1,6 +1,6 @@
 # DataPilot AI
 
-DataPilot AI is a working local-first application for uploading CSV/Excel datasets, profiling and versioning their contents, asking deterministic natural-language questions, discovering insights, generating charts, and downloading analysis reports. Calculations run through validated Pandas or DuckDB engines; AI providers only interpret intent and explain calculated results.
+DataPilot AI is a workspace-isolated SaaS application for uploading CSV/Excel datasets, profiling and versioning their contents, asking deterministic natural-language questions, discovering insights, generating charts, and downloading analysis reports. Calculations run through validated Pandas or DuckDB engines; AI providers only interpret intent and explain calculated results.
 
 Profiles include semantic column roles in addition to physical dtypes. Measures, categorical/temporal/boolean dimensions, identifiers, and high-cardinality dimensions receive centralized aggregation and automatic-analysis policies so mathematically valid but meaningless calculations—such as summing a year or customer ID—are rejected.
 
@@ -17,6 +17,8 @@ Profiles include semantic column roles in addition to physical dtypes. Measures,
 - `backend/app/services/jobs`: persistent background report jobs and progress stages
 - `backend/app/services/ai`: offline Mock plus optional Ollama/OpenAI providers
 - `frontend/src`: Next.js App Router UI and typed API client
+
+Accounts use Argon2 passwords, short-lived JWT access tokens, rotating HttpOnly refresh cookies, and backend-validated workspace membership. Dataset metadata, versions, sessions, runs, saved analyses, jobs, reports, usage, and activity are all tenant-scoped.
 
 Uploaded files are assigned UUIDs and normalized to Zstandard-compressed Parquet beneath the configured storage root. Version 0 is immutable; every confirmed cleaning or restore creates a numbered Parquet version and updates the database pointer. DuckDB scans supported plans directly from Parquet. Paths and raw internal models are never returned to clients.
 
@@ -46,6 +48,8 @@ npm run dev
 ```
 
 Open http://localhost:3000.
+
+Register the first account in the UI. Its default workspace uses the Free plan; plan limits are enforced centrally by the backend. For a containerized PostgreSQL deployment, see [deployment readiness](docs/deployment.md).
 
 ## Test and build
 
@@ -86,7 +90,12 @@ Column matching is case-insensitive and tolerates spaces/underscores. Ambiguous 
 ## API
 
 - `GET /api/health`
-- `GET /api/datasets` (persistent dataset library)
+- `GET /api/ready`
+- `POST /api/auth/register|login|refresh|logout`, `GET|PATCH /api/auth/me`
+- `GET|POST /api/workspaces`, `GET|PATCH /api/workspaces/{workspace_id}`
+- `GET /api/dashboard`, `/api/usage`, and `/api/activity`
+- `GET /api/datasets` (workspace library with `search`, `source_type`, `recently_analyzed`, `limit`, and `offset`)
+- `PATCH /api/datasets/{dataset_id}` (rename)
 - `POST /api/datasets/upload` (multipart file, optional `sheet_name` and `header_row`)
 - `POST /api/datasets/inspect` (Excel worksheet discovery)
 - `GET /api/datasets/{dataset_id}`

@@ -13,9 +13,54 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    email: Mapped[str] = mapped_column(String(320))
+    normalized_email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(500))
+    display_name: Mapped[str] = mapped_column(String(120))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Workspace(Base):
+    __tablename__ = "workspaces"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    name: Mapped[str] = mapped_column(String(120))
+    slug: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    owner_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    plan_code: Mapped[str] = mapped_column(String(30), default="free")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class WorkspaceMember(Base):
+    __tablename__ = "workspace_members"
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    role: Mapped[str] = mapped_column(String(20), default="member")
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RefreshSession(Base):
+    __tablename__ = "refresh_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class Dataset(Base):
     __tablename__ = "datasets"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    uploader_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     name: Mapped[str] = mapped_column(String(255))
     original_filename: Mapped[str] = mapped_column(String(255))
     source_type: Mapped[str] = mapped_column(String(20))
@@ -30,6 +75,7 @@ class Dataset(Base):
     storage_key: Mapped[str] = mapped_column(String(500))
     profile_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="ready")
+    storage_bytes: Mapped[int] = mapped_column(Integer, default=0)
     versions: Mapped[list["DatasetVersion"]] = relationship(cascade="all, delete-orphan", back_populates="dataset")
     sessions: Mapped[list["AnalysisSession"]] = relationship(cascade="all, delete-orphan", back_populates="dataset")
     saved_analyses: Mapped[list["SavedAnalysis"]] = relationship(cascade="all, delete-orphan", back_populates="dataset")
@@ -40,6 +86,7 @@ class DatasetVersion(Base):
     __tablename__ = "dataset_versions"
     __table_args__ = (UniqueConstraint("dataset_id", "version", name="uq_dataset_version"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
     version: Mapped[int] = mapped_column(Integer)
     operation: Mapped[str] = mapped_column(String(80))
@@ -55,6 +102,8 @@ class DatasetVersion(Base):
 class AnalysisSession(Base):
     __tablename__ = "analysis_sessions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     current_dataset_version: Mapped[int] = mapped_column(Integer, default=0)
@@ -67,6 +116,8 @@ class AnalysisSession(Base):
 class AnalysisRun(Base):
     __tablename__ = "analysis_runs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     session_id: Mapped[str | None] = mapped_column(ForeignKey("analysis_sessions.id", ondelete="CASCADE"), nullable=True, index=True)
     dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
     dataset_version: Mapped[int] = mapped_column(Integer)
@@ -86,6 +137,8 @@ class AnalysisRun(Base):
 class SavedAnalysis(Base):
     __tablename__ = "saved_analyses"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(255))
     query_plan: Mapped[dict] = mapped_column(JSON)
@@ -98,6 +151,8 @@ class SavedAnalysis(Base):
 class Job(Base):
     __tablename__ = "jobs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     type: Mapped[str] = mapped_column(String(50))
     dataset_id: Mapped[str | None] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="queued")
@@ -110,3 +165,26 @@ class Job(Base):
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     result_reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
     dataset: Mapped[Dataset | None] = relationship(back_populates="jobs")
+
+
+class UsageEvent(Base):
+    __tablename__ = "usage_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(50), index=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    resource_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class ActivityLog(Base):
+    __tablename__ = "activity_logs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    activity_type: Mapped[str] = mapped_column(String(50), index=True)
+    resource_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

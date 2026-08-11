@@ -26,9 +26,11 @@ class DatasetStorageBackend(ABC):
 
 
 class LocalParquetDatasetStorage(DatasetStorageBackend):
-    def __init__(self, root: Path, compression: str | None = None) -> None:
+    def __init__(self, root: Path, compression: str | None = None, workspace_id: str | None = None, user_id: str | None = None) -> None:
         self.root = root.resolve()
         self.compression = compression or get_settings().parquet_compression
+        self.workspace_id = workspace_id or get_settings().legacy_workspace_id
+        self.user_id = user_id
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _folder(self, dataset_id: str) -> Path:
@@ -58,13 +60,16 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
         except Exception as exc:
             raise AppError("Unable to persist the uploaded dataset.", "STORAGE_WRITE_FAILED", 500) from exc
         now = datetime.now(timezone.utc)
-        metadata: dict[str, Any] = {"id": dataset_id, "name": Path(name).name, "source_type": source_type, "sheet_name": sheet_name, "rows": len(frame), "columns": len(frame.columns), "created_at": now.isoformat(), "updated_at": now.isoformat(), "current_version": 0, "storage_format": "parquet", "storage_key": f"{dataset_id}/versions/version_0.parquet", "status": "ready"}
+        metadata: dict[str, Any] = {"id": dataset_id, "workspace_id": self.workspace_id, "name": Path(name).name, "source_type": source_type, "sheet_name": sheet_name, "rows": len(frame), "columns": len(frame.columns), "created_at": now.isoformat(), "updated_at": now.isoformat(), "current_version": 0, "storage_format": "parquet", "storage_key": f"{dataset_id}/versions/version_0.parquet", "status": "ready", "storage_bytes": 0}
         (folder / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
         (folder / "audit.json").write_text("[]", encoding="utf-8")
         (folder / "versions.json").write_text(json.dumps({"current_version": 0, "versions": [{"version": 0, "created_at": now.isoformat(), "operation": "upload", "description": "Original uploaded dataset", "affected_rows": 0, "source_version": None, "storage_key": metadata["storage_key"]}]}), encoding="utf-8")
+        storage_bytes = sum(path.stat().st_size for path in folder.rglob("*") if path.is_file())
+        metadata["storage_bytes"] = storage_bytes
+        (folder / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
         with session_scope() as session:
-            DatasetRepository(session).create(id=dataset_id, name=Path(name).name, original_filename=Path(name).name, source_type=source_type, sheet_name=sheet_name, row_count=len(frame), column_count=len(frame.columns), created_at=now, updated_at=now, current_version=0, storage_format="parquet", storage_key=metadata["storage_key"], status="ready")
-            DatasetVersionRepository(session).create(dataset_id=dataset_id, version=0, operation="upload", description="Original uploaded dataset", affected_rows=0, storage_key=metadata["storage_key"], is_current=True)
+            DatasetRepository(session, self.workspace_id).create(id=dataset_id, uploader_user_id=self.user_id, name=Path(name).name, original_filename=Path(name).name, source_type=source_type, sheet_name=sheet_name, row_count=len(frame), column_count=len(frame.columns), created_at=now, updated_at=now, current_version=0, storage_format="parquet", storage_key=metadata["storage_key"], status="ready", storage_bytes=storage_bytes)
+            DatasetVersionRepository(session, self.workspace_id).create(dataset_id=dataset_id, version=0, operation="upload", description="Original uploaded dataset", affected_rows=0, storage_key=metadata["storage_key"], is_current=True)
         return metadata
 
     def _legacy_metadata(self, dataset_id: str) -> dict[str, Any]:
@@ -74,13 +79,16 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
 
     def _ensure_database_record(self, dataset_id: str) -> None:
         with session_scope() as session:
-            repository = DatasetRepository(session)
-            try: repository.get(dataset_id); return
-            except DatasetNotFoundError: pass
+            repository = DatasetRepository(session, self.workspace_id)
+            existing = repository.get_any(dataset_id)
+            if existing is not None:
+                if existing.workspace_id != self.workspace_id: raise DatasetNotFoundError()
+                return
+            if self.workspace_id != get_settings().legacy_workspace_id: raise DatasetNotFoundError()
             metadata = self._legacy_metadata(dataset_id); path = self._ensure_parquet(dataset_id)
             created = datetime.fromisoformat(metadata["created_at"])
-            repository.create(id=dataset_id, name=metadata["name"], original_filename=metadata["name"], source_type=metadata["source_type"], sheet_name=metadata.get("sheet_name"), row_count=metadata["rows"], column_count=metadata["columns"], created_at=created, updated_at=created, current_version=self._legacy_versions(dataset_id)["current_version"], storage_format="parquet", storage_key=str(path.relative_to(self.root)).replace("\\", "/"), status="ready")
-            version_repo = DatasetVersionRepository(session)
+            repository.create(id=dataset_id, uploader_user_id=self.user_id, name=metadata["name"], original_filename=metadata["name"], source_type=metadata["source_type"], sheet_name=metadata.get("sheet_name"), row_count=metadata["rows"], column_count=metadata["columns"], created_at=created, updated_at=created, current_version=self._legacy_versions(dataset_id)["current_version"], storage_format="parquet", storage_key=str(path.relative_to(self.root)).replace("\\", "/"), status="ready", storage_bytes=sum(item.stat().st_size for item in self._folder(dataset_id).rglob("*") if item.is_file()))
+            version_repo = DatasetVersionRepository(session, self.workspace_id)
             for item in self._legacy_versions(dataset_id)["versions"]:
                 version_path = self._ensure_version_parquet(dataset_id, item["version"])
                 version_repo.create(dataset_id=dataset_id, version=item["version"], operation=item["operation"], description=item["description"], affected_rows=item.get("affected_rows", 0), storage_key=str(version_path.relative_to(self.root)).replace("\\", "/"), restored_from_version=item.get("source_version") if item["operation"] == "restore" else None, is_current=item["version"] == self._legacy_versions(dataset_id)["current_version"])
@@ -107,7 +115,7 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
         self._ensure_database_record(dataset_id)
         selected = self.current_version(dataset_id) if version is None else version
         with session_scope() as session:
-            record = DatasetVersionRepository(session).get(dataset_id, selected)
+            record = DatasetVersionRepository(session, self.workspace_id).get(dataset_id, selected)
             path = (self.root / record.storage_key).resolve()
         if self.root not in path.parents or not path.is_file(): raise DatasetNotFoundError()
         return path
@@ -126,24 +134,25 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
     def load_metadata(self, dataset_id: str) -> dict[str, Any]:
         self._ensure_database_record(dataset_id)
         with session_scope() as session:
-            item = DatasetRepository(session).get(dataset_id)
-            return {"id": item.id, "name": item.name, "source_type": item.source_type, "sheet_name": item.sheet_name, "rows": item.row_count, "columns": item.column_count, "created_at": item.created_at, "updated_at": item.updated_at, "current_version": item.current_version, "storage_format": item.storage_format, "status": item.status, "profile_summary": item.profile_summary, "last_analyzed_at": item.last_analyzed_at}
+            item = DatasetRepository(session, self.workspace_id).get(dataset_id)
+            return {"id": item.id, "workspace_id": item.workspace_id, "name": item.name, "source_type": item.source_type, "sheet_name": item.sheet_name, "rows": item.row_count, "columns": item.column_count, "created_at": item.created_at, "updated_at": item.updated_at, "current_version": item.current_version, "storage_format": item.storage_format, "status": item.status, "profile_summary": item.profile_summary, "last_analyzed_at": item.last_analyzed_at, "storage_bytes": item.storage_bytes, "uploader_user_id": item.uploader_user_id}
 
     def update_profile(self, dataset_id: str, profile: dict[str, Any]) -> None:
-        with session_scope() as session: DatasetRepository(session).update_profile(dataset_id, profile)
+        with session_scope() as session: DatasetRepository(session, self.workspace_id).update_profile(dataset_id, profile)
 
     def list_datasets(self) -> list[dict[str, Any]]:
         with session_scope() as session:
-            return DatasetRepository(session).list()
+            return DatasetRepository(session, self.workspace_id).list()
 
     def create_version(self, dataset_id: str, frame: pd.DataFrame, operation: str, description: str, affected_rows: int = 0, source_version: int | None = None) -> int:
         self._ensure_database_record(dataset_id)
         with session_scope() as session:
-            dataset = DatasetRepository(session).get(dataset_id); version = max([item["version"] for item in DatasetVersionRepository(session).list(dataset_id)], default=-1) + 1
+            dataset = DatasetRepository(session, self.workspace_id).get(dataset_id); version = max([item["version"] for item in DatasetVersionRepository(session, self.workspace_id).list(dataset_id)], default=-1) + 1
         path = self._folder(dataset_id) / "versions" / f"version_{version}.parquet"; self._write_parquet(frame, path)
         key = str(path.relative_to(self.root)).replace("\\", "/")
         with session_scope() as session:
-            DatasetVersionRepository(session).create(dataset_id=dataset_id, version=version, operation=operation, description=description, affected_rows=affected_rows, storage_key=key, restored_from_version=source_version if operation == "restore" else None, is_current=True)
+            DatasetVersionRepository(session, self.workspace_id).create(dataset_id=dataset_id, version=version, operation=operation, description=description, affected_rows=affected_rows, storage_key=key, restored_from_version=source_version if operation == "restore" else None, is_current=True)
+            DatasetRepository(session, self.workspace_id).update_storage(dataset_id, sum(item.stat().st_size for item in self._folder(dataset_id).rglob("*") if item.is_file()))
         return version
 
     def restore_version(self, dataset_id: str, version: int) -> tuple[pd.DataFrame, int]:
@@ -156,12 +165,12 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
 
     def current_version(self, dataset_id: str) -> int:
         self._ensure_database_record(dataset_id)
-        with session_scope() as session: return DatasetRepository(session).get(dataset_id).current_version
+        with session_scope() as session: return DatasetRepository(session, self.workspace_id).get(dataset_id).current_version
 
     def list_versions(self, dataset_id: str) -> dict[str, Any]:
         self._ensure_database_record(dataset_id)
         with session_scope() as session:
-            dataset = DatasetRepository(session).get(dataset_id); items = DatasetVersionRepository(session).list(dataset_id)
+            dataset = DatasetRepository(session, self.workspace_id).get(dataset_id); items = DatasetVersionRepository(session, self.workspace_id).list(dataset_id)
             return {"current_version": dataset.current_version, "versions": [{"version": item["version"], "created_at": item["created_at"], "operation": item["operation"], "description": item["description"], "affected_rows": item["affected_rows"], "source_version": item["restored_from_version"], "is_current": item["is_current"]} for item in items]}
 
     def load_audit(self, dataset_id: str) -> list[dict[str, Any]]:
@@ -173,7 +182,7 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
 
     def delete_dataset(self, dataset_id: str) -> None:
         folder = self._folder(dataset_id); self._ensure_database_record(dataset_id)
-        with session_scope() as session: DatasetRepository(session).delete(dataset_id)
+        with session_scope() as session: DatasetRepository(session, self.workspace_id).delete(dataset_id)
         try:
             if folder.is_dir(): shutil.rmtree(folder)
         except Exception as exc:

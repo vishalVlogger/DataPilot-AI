@@ -21,6 +21,11 @@ class DatasetMetadata(BaseModel):
     rows: int
     columns: int
     created_at: datetime
+    updated_at: datetime | None = None
+    current_version: int = 0
+    storage_format: str = "parquet"
+    status: str = "ready"
+    last_analyzed_at: datetime | None = None
 
 
 class ColumnProfile(BaseModel):
@@ -146,6 +151,7 @@ class AnalysisPlan(BaseModel):
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=2, max_length=500)
+    session_id: str | None = None
 
 
 class ChartSuggestion(BaseModel):
@@ -274,14 +280,99 @@ class ReportRequest(BaseModel):
     include_quality: bool = True
     include_charts: bool = True
     include_version_history: bool = False
+    format: Literal["html", "pdf"] = "html"
+    async_job: bool = False
 
 
 class AnalyzeRequest(BaseModel):
     plan: AnalysisPlan
+    session_id: str | None = None
+    question: str | None = Field(default=None, max_length=500)
 
 
 class AnalysisResponse(BaseModel):
     plan: AnalysisPlan
     result: Any
     explanation: dict[str, Any]
+    metadata: dict[str, Any]
+
+
+class SessionCreateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=255)
+
+
+class SessionResponse(BaseModel):
+    id: str
+    dataset_id: str
+    title: str | None = None
+    current_dataset_version: int
+    created_at: datetime
+    last_activity_at: datetime
+
+
+class AnalysisRunResponse(BaseModel):
+    id: str
+    session_id: str | None
+    dataset_id: str
+    dataset_version: int
+    question: str | None
+    query_plan: dict[str, Any]
+    result_summary: Any | None
+    execution_engine: str | None
+    execution_duration_ms: float | None
+    ai_provider: str | None
+    ai_explanation: str | None
+    success: bool
+    error_code: str | None
+    created_at: datetime
+
+
+class SavedAnalysisRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    plan: AnalysisPlan
+    chart_config: dict[str, Any] | None = None
+
+
+class SavedAnalysisResponse(BaseModel):
+    id: str
+    dataset_id: str
+    name: str
+    query_plan: dict[str, Any]
+    chart_config: dict[str, Any] | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class JobResponse(BaseModel):
+    id: str
+    type: str
+    dataset_id: str | None
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    stage: str
+    progress: int | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    error_code: str | None
+    error_message: str | None
+    result_reference: str | None
+
+
+class JobAcceptedResponse(BaseModel):
+    job_id: str
+    status: str = "queued"
+
+
+class DrillDownRequest(BaseModel):
+    base_plan: AnalysisPlan
+    clicked_dimension: str
+    clicked_value: Any
+    next_dimension: str
+    breadcrumb: list[str] = Field(default_factory=list, max_length=10)
+
+
+class DrillDownResponse(BaseModel):
+    plan: AnalysisPlan
+    result: Any
+    breadcrumb: list[str]
     metadata: dict[str, Any]

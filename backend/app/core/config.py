@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     max_analysis_rows: int = 1_000_000
     forced_execution_engine: str | None = None
     data_storage_dir: Path = Path(".data")
+    dataset_storage_root: Path | None = None
+    parquet_compression: str = "zstd"
+    database_url: str = "sqlite:///./datapilot.db"
+    enable_pdf_reports: bool = True
+    background_jobs_enabled: bool = True
     cors_origins: str = "http://localhost:3000"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
@@ -33,6 +38,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def storage_root(self) -> Path:
+        return self.dataset_storage_root or self.data_storage_dir
 
 
 @lru_cache

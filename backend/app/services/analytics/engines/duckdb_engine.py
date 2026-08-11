@@ -1,5 +1,6 @@
 from time import perf_counter
 from typing import Any
+from pathlib import Path
 
 import duckdb
 import pandas as pd
@@ -48,15 +49,21 @@ class DuckDBExecutionEngine(AnalyticsExecutionEngine):
     name = "duckdb"
     sql_operations = {"aggregate", "group_and_aggregate", "filter", "sort", "top_n", "bottom_n", "count", "distinct_count", "trend", "compare_periods", "compare_groups", "percent_of_total", "contribution", "rank", "variance", "compare_segments"}
 
-    async def execute_plan(self, dataset: pd.DataFrame, plan: AnalysisPlan) -> EngineResult:
-        validate_plan(dataset, plan)
+    async def execute_plan(self, dataset: pd.DataFrame | Path, plan: AnalysisPlan) -> EngineResult:
         started = perf_counter()
         if plan.operation not in self.sql_operations:
-            result = execute_plan(dataset, plan)
+            frame = pd.read_parquet(dataset) if isinstance(dataset, Path) else dataset
+            result = execute_plan(frame, plan)
             return EngineResult(result=result, engine="pandas_fallback", duration_ms=round((perf_counter() - started) * 1000, 3))
         connection = duckdb.connect(database=":memory:")
         try:
-            connection.register("dataset", dataset)
+            if isinstance(dataset, Path):
+                connection.from_parquet(str(dataset)).create_view("dataset")
+                validation_sample = connection.execute("SELECT * FROM dataset LIMIT 1000").fetchdf()
+            else:
+                connection.register("dataset", dataset)
+                validation_sample = dataset
+            validate_plan(validation_sample, plan)
             result = self._execute(connection, plan)
         except AppError:
             raise

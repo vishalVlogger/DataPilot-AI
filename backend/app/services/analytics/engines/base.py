@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+from pathlib import Path
 
 import pandas as pd
 
@@ -18,5 +19,5 @@ class AnalyticsExecutionEngine(ABC):
     name: str
 
     @abstractmethod
-    async def execute_plan(self, dataset: pd.DataFrame, plan: AnalysisPlan) -> EngineResult:
+    async def execute_plan(self, dataset: pd.DataFrame | Path, plan: AnalysisPlan) -> EngineResult:
         raise NotImplementedError

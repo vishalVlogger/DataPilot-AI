@@ -6,6 +6,11 @@ export type DatasetMetadata = {
   rows: number;
   columns: number;
   created_at: string;
+  updated_at?: string | null;
+  current_version?: number;
+  storage_format?: string;
+  status?: string;
+  last_analyzed_at?: string | null;
 };
 
 export type ColumnProfile = {
@@ -41,7 +46,7 @@ export type AskResponse = {
   plan: Record<string, unknown>;
   chart_suggestion?: { type: ChartType } | null;
   explanation?: { metric?: string | null; aggregation?: string | null; grouped_by?: string[]; filters?: unknown[]; date_filter?: unknown } | null;
-  metadata?: { execution_engine?: string; dataset_version?: number; execution_ms?: number; provider_fallback?: boolean; cached?: boolean } | null;
+  metadata?: { execution_engine?: string; dataset_version?: number; execution_ms?: number; provider_fallback?: boolean; cached?: boolean; session_id?: string; run_id?: string } | null;
 };
 
 export type Insight = { type: string; severity: "info" | "warning" | "critical"; title: string; description: string; metric?: string | null; value?: number | string | null };
@@ -53,4 +58,8 @@ export type CleaningOperation = { type: CleaningType; column?: string; value?: s
 export type CleaningPreview = { changes: { operation: CleaningOperation; affected_rows: number; affected_cells: number; before_examples: string[]; after_examples: string[]; warnings: string[] }[]; affected_rows: number; affected_cells: number; resulting_rows: number; warnings: string[] };
 export type DatasetVersion = { version: number; created_at: string; operation: string; description: string; affected_rows: number; source_version: number | null; is_current: boolean };
 export type VersionList = { current_version: number; versions: DatasetVersion[] };
-export type ReportOptions = { title: string; include_profile: boolean; include_insights: boolean; include_quality: boolean; include_charts: boolean; include_version_history: boolean };
+export type ReportOptions = { title: string; include_profile: boolean; include_insights: boolean; include_quality: boolean; include_charts: boolean; include_version_history: boolean; format: "html" | "pdf"; async_job: boolean };
+export type AnalysisSession = { id: string; dataset_id: string; title: string | null; current_dataset_version: number; created_at: string; last_activity_at: string };
+export type SavedAnalysis = { id: string; dataset_id: string; name: string; query_plan: Record<string, unknown>; chart_config: Record<string, unknown> | null; created_at: string; updated_at: string };
+export type Job = { id: string; type: string; dataset_id: string | null; status: "queued" | "running" | "completed" | "failed" | "cancelled"; stage: string; progress: number | null; error_message: string | null; result_reference: string | null };
+export type DrillDownResponse = { plan: Record<string, unknown>; result: Record<string, string | number | null>[]; breadcrumb: string[]; metadata: Record<string, unknown> };

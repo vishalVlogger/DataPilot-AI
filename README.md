@@ -5,16 +5,18 @@ DataPilot AI is a working local-first application for uploading CSV/Excel datase
 ## Architecture
 
 - `backend/app/api/routes`: small HTTP route handlers
-- `backend/app/services/datasets`: validated file parsing and local dataset storage
+- `backend/app/services/datasets`: validated ingestion, Parquet versions, and lazy legacy migration
+- `backend/app/models` and `repositories`: SQLAlchemy metadata, sessions, runs, saved analyses, and jobs
 - `backend/app/services/analytics`: profiling and safe query-plan execution
 - `backend/app/services/analytics/engines`: async Pandas/DuckDB execution abstraction and threshold selector
 - `backend/app/services/cleaning`: preview-first, confirmed cleaning operations
 - `backend/app/services/visualization`: calculated chart-data generation
-- `backend/app/services/reports`: escaped, real-value HTML report generation
+- `backend/app/services/reports`: escaped, real-value HTML and ReportLab PDF generation
+- `backend/app/services/jobs`: persistent background report jobs and progress stages
 - `backend/app/services/ai`: offline Mock plus optional Ollama/OpenAI providers
 - `frontend/src`: Next.js App Router UI and typed API client
 
-Uploaded files are assigned UUIDs and stored beneath the configured data directory. Version 0 is immutable; every confirmed cleaning or restore creates a numbered version and updates the working pointer. Paths and raw internal models are never returned to clients.
+Uploaded files are assigned UUIDs and normalized to Zstandard-compressed Parquet beneath the configured storage root. Version 0 is immutable; every confirmed cleaning or restore creates a numbered Parquet version and updates the database pointer. DuckDB scans supported plans directly from Parquet. Paths and raw internal models are never returned to clients.
 
 ## Run locally
 
@@ -26,6 +28,7 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 Copy-Item ..\.env.example .env
+alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
@@ -81,6 +84,7 @@ Column matching is case-insensitive and tolerates spaces/underscores. Ambiguous 
 ## API
 
 - `GET /api/health`
+- `GET /api/datasets` (persistent dataset library)
 - `POST /api/datasets/upload` (multipart file, optional `sheet_name` and `header_row`)
 - `POST /api/datasets/inspect` (Excel worksheet discovery)
 - `GET /api/datasets/{dataset_id}`
@@ -96,6 +100,14 @@ Column matching is case-insensitive and tolerates spaces/underscores. Ambiguous 
 - `GET /api/datasets/{dataset_id}/versions`
 - `POST /api/datasets/{dataset_id}/versions/{version}/restore`
 - `POST /api/datasets/{dataset_id}/report`
+- `DELETE /api/datasets/{dataset_id}`
+- `POST|GET /api/datasets/{dataset_id}/sessions`
+- `GET /api/sessions/{session_id}` and `/runs`
+- `POST|GET /api/datasets/{dataset_id}/saved-analyses`
+- `POST /api/saved-analyses/{analysis_id}/run`
+- `DELETE /api/saved-analyses/{analysis_id}`
+- `POST /api/datasets/{dataset_id}/drilldown`
+- `GET /api/jobs/{job_id}` and `/result`
 - `GET /api/datasets/{dataset_id}/export?format=csv|xlsx&version=current|original`
 
 ## Analytics and safety
@@ -104,7 +116,7 @@ Query plans support aggregate, grouped aggregate, multiple filters/groups/sorts,
 
 Small datasets use Pandas by default. Datasets at `DUCKDB_ROW_THRESHOLD` use DuckDB for safe application-generated queries. `FORCED_EXECUTION_ENGINE=pandas|duckdb` is available for development. `MAX_ANALYSIS_ROWS` provides a separate execution safety ceiling.
 
-DuckDB natively executes validated filtering, sorting, aggregation, ranking, contribution, variance, trends, and ungrouped period comparisons. Windowed/pipeline operations that are not yet compiled to DuckDB use the reference Pandas implementation and report `pandas_fallback` in timing metadata.
+DuckDB natively executes validated filtering, sorting, aggregation, ranking, contribution, variance, trends, and ungrouped period comparisons directly against Parquet. Windowed/pipeline operations that are not yet compiled to DuckDB use the reference Pandas implementation and report `pandas_fallback` in timing metadata.
 
 Charts support bar, column, line, pie, and scatter output using Recharts. Chart values always come from the analytics executor.
 
@@ -138,14 +150,19 @@ Provider output must validate as an `AnalysisPlan`. Provider failures fall back 
 
 ## Reports
 
-Reports are generated as self-contained HTML with configurable profile, insight, quality, chart-summary, and version-history sections. All displayed values are calculated from the current dataset version. Report titles are escaped and download filenames are sanitized.
+Reports are generated as self-contained HTML or paginated PDF with configurable profile, insight, quality, chart-summary, and version-history sections. Generation may run synchronously or as a persistent background job with queued/running/completed/failed states and progress stages. All displayed values are calculated from the current dataset version. Report titles are escaped and download filenames are sanitized.
+
+## Persistence and migration
+
+SQLite is the zero-configuration default. Set `DATABASE_URL=postgresql+psycopg://user:password@host/database` for PostgreSQL, then run `alembic upgrade head`. SQLAlchemy stores dataset metadata, version pointers, analysis sessions/runs, saved plans, and jobs; dataset contents remain in Parquet.
+
+Legacy Pickle datasets are migrated lazily on first access. Their existing files remain untouched while equivalent Parquet versions and database records are created. See [the reproducible 100k/500k benchmark](docs/milestone-4-benchmark.md) for measured storage, latency, and memory results.
 
 ## Known limitations
 
 - Mock intent parsing intentionally supports common phrasing rather than unrestricted language.
 - Category-value inference samples at most 20 unique values per categorical column.
 - Relative dates and period comparisons use standard calendar boundaries and the server clock.
-- Storage and cleaning audit metadata are local filesystem based and intended for single-instance MVP use.
-- Local version history currently stores a full Pickle snapshot per version; delta/object-storage versions are future work.
-- PDF reports are not included; the report service is structured for a later PDF renderer.
-- CSV/Excel ingestion still parses with Pandas before DuckDB execution; direct Parquet/DuckDB-backed ingestion is future work.
+- Dataset contents and cleaning audit logs use local filesystem storage; an object-storage backend is a future extension of the storage interface.
+- Each version is a full Parquet snapshot; delta versions and distributed job workers are future work.
+- CSV/Excel ingestion still parses once with Pandas before normalization to Parquet.

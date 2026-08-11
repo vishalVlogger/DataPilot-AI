@@ -5,7 +5,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
-from app.models import AccountToken, ActivityLog, Dataset, Feedback, Job, UsageEvent, User, Workspace, WorkspaceInvitation, WorkspaceMember
+from app.models import AccountToken, ActivityLog, Dataset, Feedback, FeedbackAttachment, Job, UsageEvent, User, Workspace, WorkspaceInvitation, WorkspaceMember
 from app.repositories.saas import model_dict
 
 
@@ -36,7 +36,12 @@ class InvitationRepository:
         item = WorkspaceInvitation(workspace_id=self.workspace_id, email=email, normalized_email=normalized_email, role=role, token_hash=token_hash, invited_by_user_id=invited_by, expires_at=expires_at); self.session.add(item); self.session.commit(); return item
     def list(self) -> list[dict[str, Any]]:
         items = self.session.scalars(select(WorkspaceInvitation).where(WorkspaceInvitation.workspace_id == self.workspace_id).order_by(WorkspaceInvitation.created_at.desc())).all()
-        return [model_dict(item) for item in items]
+        now = datetime.now(timezone.utc); results = []
+        for item in items:
+            result = model_dict(item)
+            result["status"] = "accepted" if item.accepted_at is not None else "revoked" if item.revoked_at is not None else "expired" if _aware(item.expires_at) <= now else "pending"
+            results.append(result)
+        return results
     def by_token(self, token_hash: str) -> WorkspaceInvitation:
         item = self.session.scalar(select(WorkspaceInvitation).where(WorkspaceInvitation.token_hash == token_hash))
         if item is None or item.revoked_at is not None or item.accepted_at is not None or _aware(item.expires_at) <= datetime.now(timezone.utc): raise AppError("This invitation is invalid or has expired.", "INVITATION_INVALID", 400)
@@ -57,6 +62,14 @@ class InvitationRepository:
         if item is None: raise AppError("Invitation not found.", "INVITATION_NOT_FOUND", 404)
         if item.accepted_at is not None: raise AppError("Accepted invitations cannot be revoked.", "INVITATION_ALREADY_ACCEPTED", 409)
         item.revoked_at = datetime.now(timezone.utc); self.session.commit()
+    def resend(self, invitation_id: str, token_hash: str, expires_at: datetime) -> WorkspaceInvitation:
+        item = self.session.scalar(select(WorkspaceInvitation).where(WorkspaceInvitation.id == invitation_id, WorkspaceInvitation.workspace_id == self.workspace_id))
+        if item is None: raise AppError("Invitation not found.", "INVITATION_NOT_FOUND", 404)
+        if item.accepted_at is not None: raise AppError("Accepted invitations cannot be resent.", "INVITATION_ALREADY_ACCEPTED", 409)
+        existing_member = self.session.scalar(select(WorkspaceMember).join(User, User.id == WorkspaceMember.user_id).where(WorkspaceMember.workspace_id == item.workspace_id, User.normalized_email == item.normalized_email))
+        if existing_member: raise AppError("This user is already a workspace member.", "WORKSPACE_MEMBER_EXISTS", 409)
+        item.token_hash = token_hash; item.expires_at = expires_at; item.revoked_at = None; self.session.commit()
+        return item
 
 
 class MemberRepository:
@@ -83,8 +96,32 @@ class FeedbackRepository:
         if dataset_id and not self.session.scalar(select(Dataset.id).where(Dataset.id == dataset_id, Dataset.workspace_id == workspace_id)):
             raise AppError("Dataset not found.", "DATASET_NOT_FOUND", 404)
         item = Feedback(**values); self.session.add(item); self.session.commit(); return model_dict(item)
+    def get_owned(self, feedback_id: str, workspace_id: str, user_id: str) -> Feedback:
+        item = self.session.scalar(select(Feedback).where(Feedback.id == feedback_id, Feedback.workspace_id == workspace_id, Feedback.user_id == user_id))
+        if item is None: raise AppError("Feedback not found.", "FEEDBACK_NOT_FOUND", 404)
+        return item
+    def attachment_count(self, feedback_id: str) -> int:
+        return int(self.session.scalar(select(func.count()).select_from(FeedbackAttachment).where(FeedbackAttachment.feedback_id == feedback_id)) or 0)
+    def add_attachment(self, **values: Any) -> dict[str, Any]:
+        item = FeedbackAttachment(**values); self.session.add(item); self.session.commit(); return self.public_attachment(item)
+    def attachments(self, feedback_id: str) -> list[dict[str, Any]]:
+        items = self.session.scalars(select(FeedbackAttachment).where(FeedbackAttachment.feedback_id == feedback_id).order_by(FeedbackAttachment.created_at)).all()
+        return [self.public_attachment(item) for item in items]
+    def get_attachment_for_admin(self, feedback_id: str, attachment_id: str) -> FeedbackAttachment:
+        item = self.session.scalar(select(FeedbackAttachment).where(FeedbackAttachment.id == attachment_id, FeedbackAttachment.feedback_id == feedback_id))
+        if item is None: raise AppError("Feedback attachment not found.", "FEEDBACK_ATTACHMENT_NOT_FOUND", 404)
+        return item
+    @staticmethod
+    def public_attachment(item: FeedbackAttachment) -> dict[str, Any]:
+        return {"id": item.id, "feedback_id": item.feedback_id, "original_filename": item.original_filename, "content_type": item.content_type, "size": item.size, "created_at": item.created_at}
     def list_all(self, limit: int = 100) -> list[dict[str, Any]]:
-        return [model_dict(item) for item in self.session.scalars(select(Feedback).order_by(Feedback.created_at.desc()).limit(limit)).all()]
+        items = self.session.scalars(select(Feedback).order_by(Feedback.created_at.desc()).limit(limit)).all()
+        results = []
+        for item in items:
+            result = model_dict(item); user = self.session.get(User, item.user_id); workspace = self.session.get(Workspace, item.workspace_id)
+            result.update({"user_email": user.email if user else None, "workspace_name": workspace.name if workspace else None, "attachments": self.attachments(item.id)})
+            results.append(result)
+        return results
 
 
 class AdminRepository:

@@ -20,7 +20,7 @@ Profiles include semantic column roles in addition to physical dtypes. Measures,
 
 Accounts use Argon2 passwords, short-lived JWT access tokens, rotating HttpOnly refresh cookies, and backend-validated workspace membership. Dataset metadata, versions, sessions, runs, saved analyses, jobs, reports, usage, and activity are all tenant-scoped.
 
-Beta accounts support hashed, expiring, one-time email-verification and password-reset links through console or SMTP email providers. Password reset revokes every refresh session. Workspace owners/admins can invite verified users as admins or members, while system-administrator support access remains separate from workspace roles. The beta UI includes privacy acknowledgement, feedback, provider controls, account recovery, and metadata-only support tools.
+Beta accounts support hashed, expiring, one-time email-verification and password-reset links through console or SMTP email providers. In local console mode, verification and invitation links are shown explicitly in the UI because no message is delivered; production SMTP responses never expose tokens. Password reset revokes every refresh session. Workspace owners/admins can invite verified users as admins or members, while system-administrator support access remains separate from workspace roles. The beta UI includes privacy acknowledgement, feedback with validated attachments, provider controls, account recovery, and metadata-only support tools.
 
 Uploaded files are assigned UUIDs and normalized to Zstandard-compressed Parquet beneath the configured storage root. Version 0 is immutable; every confirmed cleaning or restore creates a numbered Parquet version and updates the database pointer. DuckDB scans supported plans directly from Parquet. Paths and raw internal models are never returned to clients.
 
@@ -122,6 +122,8 @@ Column matching is case-insensitive and tolerates spaces/underscores. Ambiguous 
 - `POST /api/datasets/{dataset_id}/drilldown`
 - `GET /api/jobs/{job_id}` and `/result`
 - `GET /api/datasets/{dataset_id}/export?format=csv|xlsx&version=current|original`
+- `GET /api/feedback/config`, `POST /api/feedback`, and `POST /api/feedback/{feedback_id}/attachments`
+- `POST /api/workspaces/{workspace_id}/invitations/{invitation_id}/resend`
 
 ## Analytics and safety
 

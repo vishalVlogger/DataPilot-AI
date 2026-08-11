@@ -4,9 +4,9 @@
 
 Set `APP_ENV=production`, a random `SECRET_KEY` of at least 32 bytes, a PostgreSQL `DATABASE_URL`, the public `FRONTEND_URL`, and the same origin in `CORS_ORIGINS`. HTTPS is required in production because refresh cookies are emitted with `Secure`. Supply SMTP credentials through secrets and set `EMAIL_PROVIDER=smtp`; the console provider is for local development only. Set `SENTRY_DSN` only when the deployment is permitted to send scrubbed diagnostics to Sentry.
 
-Run `alembic upgrade head` before each application release. Revision `0002` creates SaaS tables and assigns pre-existing records to `LEGACY_WORKSPACE_ID`, preserving local data while preventing new users from claiming it. Revision `0003` adds verification and recovery tokens, invitations, feedback, job retry metadata, and beta administration fields.
+Run `alembic upgrade head` before each application release. Revision `0002` creates SaaS tables and assigns pre-existing records to `LEGACY_WORKSPACE_ID`, preserving local data while preventing new users from claiming it. Revision `0003` adds verification and recovery tokens, invitations, feedback, job retry metadata, and beta administration fields. Revision `0004` adds tenant-scoped feedback-attachment metadata.
 
-Keep dataset storage on a persistent mounted volume; database backups do not contain Parquet files. `DATASET_STORAGE_BACKEND=local` is the supported backend in this release. The S3-compatible settings reserve the configuration contract for a future adapter and do not activate object storage yet.
+Keep dataset storage on a persistent mounted volume; database backups do not contain Parquet files or feedback attachment bodies. Back up the complete storage root together with the database. `DATASET_STORAGE_BACKEND=local` is the supported backend in this release. The S3-compatible settings reserve the configuration contract for a future adapter and do not activate object storage yet.
 
 ## Containers
 
@@ -41,3 +41,5 @@ System administration is separate from workspace roles. Grant `is_system_admin` 
 Use `REGISTRATION_MODE=open` for public beta registration or `invite_only` to require a valid invitation. `BETA_MAX_USERS` is a simple registration cap and is not a substitute for an admission system under concurrent high load. Publish the beta notice and privacy terms represented by `BETA_NOTICE`, and keep `BETA_REGISTRATION_ENABLED=false` as the operational kill switch.
 
 Feature flags default to the behavior documented in `.env.example`. Test disabled paths before deployment. Removing a member does not currently delete their account, and beta data deletion is an administrator-assisted process. A durable distributed job queue, an S3 storage adapter, automated user-data export/deletion, and richer alert routing remain post-beta work.
+
+In `EMAIL_PROVIDER=console` with `APP_ENV=development|local|test`, registration and invitation responses intentionally include development-only links for copying or opening in the local UI. Console mode does not deliver email. Never use console mode in production. SMTP mode returns only provider acceptance/failure status and never returns a verification, reset, or invitation token. Admin diagnostics expose provider configuration and safe delivery status without credentials or recipient data.

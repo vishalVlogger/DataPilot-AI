@@ -11,6 +11,9 @@ class InvitationCreateRequest(BaseModel):
 
 class InvitationResponse(BaseModel):
     id: str; workspace_id: str; email: EmailStr; role: Literal["admin", "member"]; invited_by_user_id: str; created_at: datetime; expires_at: datetime; accepted_at: datetime | None; revoked_at: datetime | None
+    status: Literal["pending", "accepted", "expired", "revoked"] = "pending"
+    delivery_status: Literal["success", "failed"] | None = None
+    development_invitation_url: str | None = None
 
 
 class MemberResponse(BaseModel):
@@ -33,8 +36,13 @@ class FeedbackRequest(BaseModel):
     user_agent: str | None = Field(default=None, max_length=500)
 
 
+class FeedbackAttachmentResponse(BaseModel):
+    id: str; feedback_id: str; original_filename: str; content_type: str; size: int; created_at: datetime
+
+
 class FeedbackResponse(BaseModel):
     id: str; category: str; message: str; current_page: str | None; dataset_id: str | None; status: str; created_at: datetime
+    attachments: list[FeedbackAttachmentResponse] = Field(default_factory=list)
 
 
 class AdminSummaryResponse(BaseModel):
@@ -43,6 +51,7 @@ class AdminSummaryResponse(BaseModel):
 
 class AdminDiagnosticsResponse(BaseModel):
     app_version: str; database: str; storage: str; queue: str; rate_limit_backend: str; storage_backend: str
+    email_provider: str; email_configured: bool; last_email_status: str | None; last_email_operation: str | None
 
 
 class SupportLookupResponse(BaseModel):

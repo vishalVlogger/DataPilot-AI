@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { acceptInvitation, AuthPayload, User, Workspace, login as apiLogin, logout as apiLogout, refreshAuth, register as apiRegister, setApiAuth } from "@/services/api";
 
-type AuthContextValue={user:User|null;workspaces:Workspace[];workspace:Workspace|null;loading:boolean;login:(email:string,password:string)=>Promise<void>;register:(email:string,password:string,name:string)=>Promise<void>;logout:()=>Promise<void>;selectWorkspace:(id:string)=>void;refresh:()=>Promise<void>};
+type AuthContextValue={user:User|null;workspaces:Workspace[];workspace:Workspace|null;loading:boolean;login:(email:string,password:string)=>Promise<void>;register:(email:string,password:string,name:string)=>Promise<AuthPayload>;logout:()=>Promise<void>;selectWorkspace:(id:string)=>void;refresh:()=>Promise<void>};
 const AuthContext=createContext<AuthContextValue|null>(null);
 
 export function AuthProvider({children}:{children:React.ReactNode}){
@@ -14,7 +14,7 @@ export function AuthProvider({children}:{children:React.ReactNode}){
   useEffect(()=>{void refresh();const unauthorized=()=>void refresh();window.addEventListener("datapilot:unauthorized",unauthorized);return()=>{window.removeEventListener("datapilot:unauthorized",unauthorized);if(refreshTimer.current)clearTimeout(refreshTimer.current);};},[]);
   async function completeSignIn(payload:AuthPayload){accept(payload);const pending=localStorage.getItem("datapilot_pending_invitation");if(pending){await acceptInvitation(pending);localStorage.removeItem("datapilot_pending_invitation");accept(await refreshAuth());}}
   async function login(email:string,password:string){await completeSignIn(await apiLogin(email,password));}
-  async function register(email:string,password:string,name:string){const invitation=localStorage.getItem("datapilot_pending_invitation")??undefined;await completeSignIn(await apiRegister(email,password,name,invitation));}
+  async function register(email:string,password:string,name:string){const invitation=localStorage.getItem("datapilot_pending_invitation")??undefined;const payload=await apiRegister(email,password,name,invitation);await completeSignIn(payload);return payload;}
   async function logout(){try{await apiLogout();}finally{if(refreshTimer.current)clearTimeout(refreshTimer.current);setApiAuth(null,null);setUser(null);setWorkspaces([]);setWorkspaceId(null);}}
   function selectWorkspace(id:string){if(!workspaces.some(w=>w.id===id))return;setWorkspaceId(id);setApiAuth(null,id);void refresh();localStorage.setItem("datapilot_workspace",id);}
   const value=useMemo(()=>({user,workspaces,workspace:workspaces.find(w=>w.id===workspaceId)??null,loading,login,register,logout,selectWorkspace,refresh}),[user,workspaces,workspaceId,loading]);

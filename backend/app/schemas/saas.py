@@ -34,6 +34,8 @@ class WorkspaceResponse(BaseModel):
 
 class AuthResponse(BaseModel):
     access_token: str; token_type: str = "bearer"; expires_in: int; user: UserResponse; workspaces: list[WorkspaceResponse]
+    email_delivery_status: str | None = None
+    development_verification_url: str | None = None
 
 
 class CurrentUserResponse(BaseModel):

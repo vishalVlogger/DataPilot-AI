@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "DataPilot AI"
-    app_version: str = "0.6.0-beta"
+    app_version: str = "0.6.1-beta"
     environment: str = "development"
     app_env: str = "development"
     ai_provider: str = "mock"
@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     email_verification_expire_hours: int = 24
     password_reset_expire_minutes: int = 60
     invitation_expire_days: int = 7
+    feedback_max_attachments: int = 3
+    feedback_max_attachment_mb: int = 5
     sentry_dsn: str | None = None
     job_execution_mode: str = "local"
     dataset_storage_backend: str = "local"
@@ -93,6 +95,10 @@ class Settings(BaseSettings):
     @property
     def secure_cookies(self) -> bool:
         return (self.app_env or self.environment).lower() in {"production", "staging"}
+
+    @property
+    def expose_development_email_links(self) -> bool:
+        return self.email_provider.casefold() == "console" and (self.app_env or self.environment).casefold() in {"development", "local", "test"}
 
 
 @lru_cache

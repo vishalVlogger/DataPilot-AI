@@ -13,18 +13,21 @@ from app.core.security import create_access_token, hash_one_time_token, hash_pas
 from app.models import User
 from app.repositories import AccountTokenRepository, InvitationRepository, RefreshSessionRepository, UserRepository, WorkspaceRepository
 from app.schemas.saas import AuthResponse, BetaAcknowledgementRequest, CurrentUserResponse, EmailRequest, LoginRequest, RegisterRequest, ResetPasswordRequest, TokenRequest, UserResponse, UserUpdateRequest, WorkspaceResponse
-from app.services.email import get_email_provider
+from app.services.email import send_transactional_email
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
-async def _send_account_token(user: User, purpose: str) -> None:
+async def _send_account_token(user: User, purpose: str) -> tuple[str, str | None]:
     settings = get_settings(); token, token_hash = new_one_time_token()
     duration = timedelta(hours=settings.email_verification_expire_hours) if purpose == "verify_email" else timedelta(minutes=settings.password_reset_expire_minutes)
     with session_scope() as session: AccountTokenRepository(session).create(user.id, purpose, token_hash, datetime.now(timezone.utc) + duration)
     route = "verify-email" if purpose == "verify_email" else "reset-password"
     label = "Verify your DataPilot email" if purpose == "verify_email" else "Reset your DataPilot password"
-    await get_email_provider().send_email(user.email, label, f"{label}: {settings.frontend_url}/{route}?token={token}\nThis one-time link expires soon.")
+    link = f"{settings.frontend_url}/{route}?token={token}"
+    delivery = await send_transactional_email(user.email, label, f"{label}: {link}\nThis one-time link expires soon.", purpose)
+    development_link = link if purpose == "verify_email" and settings.expose_development_email_links else None
+    return delivery.status, development_link
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
@@ -55,8 +58,9 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
         user = users.create(str(payload.email), normalized, hash_password(payload.password), payload.display_name.strip())
         if payload.beta_acknowledged: users.acknowledge_beta(user)
         WorkspaceRepository(session).create(user.id, f"{user.display_name}'s Workspace", get_settings().default_plan)
-    await _send_account_token(user, "verify_email")
-    return _issue(user, response, request)
+    delivery_status, development_link = await _send_account_token(user, "verify_email")
+    issued = _issue(user, response, request); issued.email_delivery_status = delivery_status; issued.development_verification_url = development_link
+    return issued
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -111,10 +115,11 @@ async def verify_email(payload: TokenRequest) -> dict[str, str]:
 
 
 @router.post("/resend-verification")
-async def resend_verification(request: Request, user=Depends(authenticated_user)) -> dict[str, str]:
+async def resend_verification(request: Request, user=Depends(authenticated_user)) -> dict[str, str | None]:
     rate_limiter.check(f"verify-resend:user:{user.id}", 3, 3600); rate_limiter.check(f"verify-resend:ip:{request.client.host if request.client else 'unknown'}", 10, 3600)
-    if user.email_verified_at is None: await _send_account_token(user, "verify_email")
-    return {"message": "If verification is still required, a new link has been sent."}
+    if user.email_verified_at is not None: return {"message": "Your email is already verified.", "delivery_status": None, "development_verification_url": None}
+    delivery_status, development_link = await _send_account_token(user, "verify_email")
+    return {"message": "Verification email requested.", "delivery_status": delivery_status, "development_verification_url": development_link}
 
 
 @router.post("/forgot-password")

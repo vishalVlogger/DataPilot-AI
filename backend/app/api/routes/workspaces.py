@@ -11,7 +11,7 @@ from app.core.security import hash_one_time_token, new_one_time_token, normalize
 from app.repositories import InvitationRepository, MemberRepository, UserRepository, WorkspaceRepository
 from app.schemas.beta import InvitationCreateRequest, InvitationResponse, MemberResponse, MemberRoleRequest
 from app.schemas.saas import WorkspaceCreateRequest, WorkspaceResponse, WorkspaceUpdateRequest
-from app.services.email import get_email_provider
+from app.services.email import send_transactional_email
 from app.services.features import feature_flags
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
@@ -47,6 +47,12 @@ def _manager(session, workspace_id: str, user_id: str) -> dict:
     return workspace
 
 
+async def _deliver_invitation(email: str, token: str) -> tuple[str, str | None]:
+    settings = get_settings(); link = f"{settings.frontend_url}/accept-invitation?token={token}"
+    result = await send_transactional_email(email, "DataPilot workspace invitation", f"You were invited to DataPilot: {link}\nThis one-time invitation expires in {settings.invitation_expire_days} days.", "workspace_invitation")
+    return result.status, link if settings.expose_development_email_links else None
+
+
 @router.post("/{workspace_id}/invitations", response_model=InvitationResponse, status_code=201)
 async def invite_member(workspace_id: str, payload: InvitationCreateRequest, request: Request, user=Depends(authenticated_user)) -> InvitationResponse:
     if not feature_flags.enabled("workspace_invites"): raise AppError("Workspace invitations are disabled.", "FEATURE_DISABLED", 404)
@@ -58,8 +64,8 @@ async def invite_member(workspace_id: str, payload: InvitationCreateRequest, req
         _manager(session, workspace_id, user.id)
         item = InvitationRepository(session, workspace_id).create(str(payload.email), normalized_email, payload.role, token_hash, user.id, datetime.now(timezone.utc) + timedelta(days=settings.invitation_expire_days))
         response = InvitationResponse.model_validate(item, from_attributes=True)
-    await get_email_provider().send_email(str(payload.email), "DataPilot workspace invitation", f"You were invited to DataPilot: {settings.frontend_url}/accept-invitation?token={token}\nThis one-time invitation expires in {settings.invitation_expire_days} days.")
-    return response
+    delivery_status, development_link = await _deliver_invitation(str(payload.email), token)
+    return response.model_copy(update={"delivery_status": delivery_status, "development_invitation_url": development_link})
 
 
 @router.get("/{workspace_id}/invitations", response_model=list[InvitationResponse])
@@ -72,6 +78,20 @@ async def list_invitations(workspace_id: str, user=Depends(authenticated_user)) 
 @router.delete("/{workspace_id}/invitations/{invitation_id}", status_code=204)
 async def revoke_invitation(workspace_id: str, invitation_id: str, user=Depends(authenticated_user)) -> None:
     with session_scope() as session: _manager(session, workspace_id, user.id); InvitationRepository(session, workspace_id).revoke(invitation_id)
+
+
+@router.post("/{workspace_id}/invitations/{invitation_id}/resend", response_model=InvitationResponse)
+async def resend_invitation(workspace_id: str, invitation_id: str, request: Request, user=Depends(authenticated_user)) -> InvitationResponse:
+    if not feature_flags.enabled("workspace_invites"): raise AppError("Workspace invitations are disabled.", "FEATURE_DISABLED", 404)
+    if user.email_verified_at is None: raise AppError("Verify your email before inviting members.", "EMAIL_VERIFICATION_REQUIRED", 403)
+    rate_limiter.check(f"invite-resend:user:{user.id}", 10, 3600); rate_limiter.check(f"invite-resend:ip:{request.client.host if request.client else 'unknown'}", 30, 3600); rate_limiter.check(f"invite-resend:invitation:{invitation_id}", 3, 3600)
+    token, token_hash = new_one_time_token(); settings = get_settings()
+    with session_scope() as session:
+        _manager(session, workspace_id, user.id)
+        item = InvitationRepository(session, workspace_id).resend(invitation_id, token_hash, datetime.now(timezone.utc) + timedelta(days=settings.invitation_expire_days))
+        response = InvitationResponse.model_validate(item, from_attributes=True)
+    delivery_status, development_link = await _deliver_invitation(item.email, token)
+    return response.model_copy(update={"delivery_status": delivery_status, "development_invitation_url": development_link, "status": "pending"})
 
 
 @router.get("/{workspace_id}/members", response_model=list[MemberResponse])

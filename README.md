@@ -26,6 +26,14 @@ Uploaded files are assigned UUIDs and normalized to Zstandard-compressed Parquet
 
 ## Run locally
 
+After completing the one-time dependency setup below, start both the frontend and backend from the repository root with one command:
+
+```powershell
+npm run dev
+```
+
+This applies pending Alembic migrations, starts FastAPI at http://localhost:8000, and starts Next.js at http://localhost:3000. Press Ctrl+C to stop both services.
+
 ### Backend
 
 ```powershell

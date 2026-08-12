@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     rate_limit_backend: str = "memory"
     redis_url: str | None = None
     email_provider: str = "console"
+    allow_console_email_links: bool = False
+    allow_insecure_staging_cookies: bool = False
     email_from: str = "DataPilot AI <no-reply@datapilot.local>"
     smtp_host: str | None = None
     smtp_port: int = 587
@@ -102,11 +104,13 @@ class Settings(BaseSettings):
 
     @property
     def secure_cookies(self) -> bool:
-        return (self.app_env or self.environment).lower() in {"production", "staging"}
+        environment = (self.app_env or self.environment).lower()
+        return environment == "production" or (environment == "staging" and not self.allow_insecure_staging_cookies)
 
     @property
     def expose_development_email_links(self) -> bool:
-        return self.email_provider.casefold() == "console" and (self.app_env or self.environment).casefold() in {"development", "local", "test"}
+        environment = (self.app_env or self.environment).casefold()
+        return self.email_provider.casefold() == "console" and (environment in {"development", "local", "test"} or (environment == "staging" and self.allow_console_email_links))
 
     @property
     def environment_name(self) -> str:

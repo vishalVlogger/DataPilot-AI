@@ -59,6 +59,25 @@ npm run dev
 
 Open http://localhost:3000.
 
+### Docker local staging
+
+Copy `.env.docker.example` to `.env`, replace every `replace-with-...` value, then start the production-like local stack:
+
+```powershell
+Copy-Item .env.docker.example .env
+docker compose --profile staging --profile minio up --build
+```
+
+This runs the frontend (`3000`), backend (`8000`), PostgreSQL, Redis, a durable worker, MinIO API (`9000`), and MinIO console (`9001`). The MinIO initializer creates the private bucket automatically. PostgreSQL, Redis, and MinIO use named volumes.
+
+Stop without deleting data using `docker compose --profile staging --profile minio down`. The following command is destructive and permanently removes local container databases and objects:
+
+```powershell
+docker compose --profile staging --profile minio down -v
+```
+
+If a port is occupied, stop the local process using `3000`, `8000`, `9000`, or `9001`, or change the matching host-side port in Compose. PostgreSQL and Redis are internal-only and do not publish `5432` or `6379` to the host.
+
 Register the first account in the UI. Its default workspace uses the Free plan; plan limits are enforced centrally by the backend. For a containerized PostgreSQL deployment, see [deployment readiness](docs/deployment.md).
 
 ## Test and build

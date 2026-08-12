@@ -1,5 +1,26 @@
 # DataPilot staging operations
 
+## Local Docker staging
+
+Copy `.env.docker.example` to `.env`, replace the placeholder secrets, and run `docker compose --profile staging --profile minio up --build`. The staging profile enables the Redis worker; the MinIO profile enables private S3-compatible storage and its idempotent bucket initializer. Use plain `docker compose up --build` for the lighter frontend/backend/PostgreSQL/Redis stack.
+
+Docker contexts are deliberately narrow (`./backend` and `./frontend`). Their context-specific `.dockerignore` files keep `.venv`, `node_modules`, `.next`, databases, Parquet datasets, local storage, caches, coverage, and environment files out of BuildKit. If context transfer unexpectedly grows, confirm those ignore files still exist and inspect the largest directories before building.
+
+Local ports are frontend `3000`, backend `8000`, MinIO API `9000`, and MinIO console `9001`. PostgreSQL `5432` and Redis `6379` are accessible only inside the Compose network. `ALLOW_CONSOLE_EMAIL_LINKS=true` and `ALLOW_INSECURE_STAGING_COOKIES=true` are local-HTTP staging switches; never enable them in production.
+
+Common failures:
+
+- Docker daemon unavailable: start Docker Desktop and confirm both Client and Server appear in `docker version`.
+- Port already in use: stop the conflicting local service or adjust the Compose host port.
+- PostgreSQL unhealthy: inspect `docker compose logs postgres`; the backend waits for `pg_isready`.
+- Redis unavailable or worker idle: inspect `docker compose logs redis worker` and run `docker compose exec backend python -m app.cli test-redis`.
+- MinIO bucket missing: inspect `minio` and the exited `minio-init` service; successful initialization exits with code 0.
+- Frontend cannot reach the API: `NEXT_PUBLIC_API_URL` must be browser-resolvable, normally `http://localhost:8000/api`, not `http://backend:8000/api`.
+- Backend unhealthy while responding: inspect `/api/ready` duration and its Docker health log; required dependency probes use bounded timeouts.
+- Large context transfer: verify `frontend/.dockerignore` excludes `node_modules` and `.next`, and `backend/.dockerignore` excludes local data and virtual environments.
+
+Use `docker compose --profile staging --profile minio down` for a graceful, persistent stop. Do not add `-v` unless you intend to permanently delete PostgreSQL, Redis, MinIO, and local dataset volumes.
+
 DataPilot 0.7 keeps local execution/storage for development and supports Redis workers plus private S3-compatible storage for staging. Run the API and worker from the same image; only the API runs Alembic migrations.
 
 ## Deployment

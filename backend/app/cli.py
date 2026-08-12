@@ -9,7 +9,7 @@ from app.core.security import normalize_email
 from app.models import User
 from app.services.admin_metrics import audit_admin
 from app.services.email import send_transactional_email
-from app.services.operations import backup_manifest, migrate_local_to_s3, production_readiness, test_database, test_redis, test_storage, verify_storage
+from app.services.operations import backup_manifest, migrate_local_to_s3, production_readiness, staging_smoke, test_database, test_redis, test_storage, verify_storage
 from app.services.workspace_lifecycle import process_due_deletions
 
 
@@ -48,7 +48,7 @@ def main() -> int:
         from app.core.config import get_settings
         if not get_settings().sentry_dsn: return output({"status": "skip", "reason": "SENTRY_DSN is not configured"})
         import sentry_sdk; sentry_sdk.capture_message("DataPilot safe staging validation"); return output({"status": "pass"})
-    if args.command == "staging-smoke": return output(production_readiness())
+    if args.command == "staging-smoke": return output(staging_smoke())
     return 1
 
 

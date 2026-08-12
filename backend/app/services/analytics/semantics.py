@@ -261,7 +261,7 @@ def describe_chart_plan(plan: Any, question: str | None = None, limit: int | Non
         question_words = _normalized(question).replace("_", " ")
         dimension_words = _normalized(dimension).replace("_", " ")
         contextual = re.search(rf"\b([a-z0-9]+\s+{re.escape(dimension_words)}s?)\b", question_words)
-        if contextual and contextual.group(1).split()[0] not in {"top", "bottom", "the", "by"}:
+        if contextual and not contextual.group(1).split()[0].isdigit() and contextual.group(1).split()[0] not in {"top", "bottom", "the", "by"}:
             dimension_label = contextual.group(1).capitalize()
         elif dimension_words == "name":
             ranked_entity = re.search(r"\b(?:top|bottom)\s+\d+\s+(?:most\s+[a-z0-9]+\s+)?([a-z0-9]+)", question_words)

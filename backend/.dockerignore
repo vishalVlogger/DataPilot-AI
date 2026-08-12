@@ -1,15 +1,14 @@
 .git
 .github
+.env
+.env.*
+!.env.example
 
 **/__pycache__
 **/*.pyc
 **/*.pyo
 **/.venv
 **/venv
-**/node_modules
-**/.next
-**/dist
-**/build
 **/.pytest_cache
 **/.mypy_cache
 **/.ruff_cache
@@ -22,15 +21,12 @@
 *.parquet
 *.log
 
-backend/.data
-backend/storage
-backend/reports
-backend/uploads
-backend/tmp
+.data
+storage
+reports
+uploads
+tmp
+tests
+scripts
 coverage
 htmlcov
-
-.env
-.env.*
-!.env.example
-!.env.docker.example

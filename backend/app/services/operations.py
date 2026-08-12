@@ -93,7 +93,11 @@ def backup_manifest() -> dict:
 
 
 def production_readiness() -> dict:
-    settings = get_settings(); checks = {"configuration": settings.readiness_errors()}
+    settings = get_settings(); configuration = settings.readiness_errors()
+    if settings.environment_name != "production": configuration.append("APP_ENV must be production for production readiness.")
+    if settings.email_provider.casefold() == "console": configuration.append("Console email is not allowed for production readiness.")
+    if not settings.secure_cookies: configuration.append("Secure cookies are required for production readiness.")
+    checks = {"configuration": list(dict.fromkeys(configuration))}
     try: checks["database"] = test_database()
     except Exception as exc: checks["database"] = {"status": "fail", "reason": str(exc)}
     try: checks["storage"] = test_storage()
@@ -102,6 +106,19 @@ def production_readiness() -> dict:
         try: checks["redis"] = test_redis()
         except Exception as exc: checks["redis"] = {"status": "fail", "reason": str(exc)}
     failed = bool(checks["configuration"]) or any(value.get("status") == "fail" for value in checks.values() if isinstance(value, dict))
+    return {"status": "fail" if failed else "pass", "checks": checks}
+
+
+def staging_smoke() -> dict:
+    settings = get_settings(); checks = {"configuration": settings.readiness_errors(), "app": {"status": "pass", "environment": settings.environment_name, "version": settings.app_version, "email_provider": settings.email_provider}}
+    for name, probe in (("database", test_database), ("storage", test_storage)):
+        try: checks[name] = probe()
+        except Exception as exc: checks[name] = {"status": "fail", "reason": str(exc)}
+    if settings.job_execution_mode.casefold() == "redis" or settings.rate_limit_backend.casefold() == "redis":
+        try: checks["redis"] = test_redis()
+        except Exception as exc: checks["redis"] = {"status": "fail", "reason": str(exc)}
+    checks["worker"] = queue_diagnostics()
+    failed = bool(checks["configuration"]) or any(value.get("status") == "fail" for value in checks.values() if isinstance(value, dict)) or (settings.job_execution_mode.casefold() == "redis" and not checks["worker"].get("worker_connected"))
     return {"status": "fail" if failed else "pass", "checks": checks}
 
 

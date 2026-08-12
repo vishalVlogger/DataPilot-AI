@@ -7,7 +7,7 @@ from app.services.ai.mock import MockAIProvider
 from app.services.analytics.engines.duckdb_engine import DuckDBExecutionEngine
 from app.services.analytics.executor import execute_plan
 from app.services.analytics.profiler import profile_dataset
-from app.services.analytics.semantics import recommend_chart_type
+from app.services.analytics.semantics import describe_chart_plan, recommend_chart_type
 from app.services.visualization.charts import HIGH_CARDINALITY_CHART_LIMIT, generate_chart
 
 
@@ -37,6 +37,12 @@ async def test_ambiguous_car_ranking_uses_transparent_price_default(cars: pd.Dat
     assert chart["title"] == chart["interpretation"]["interpreted_as"]
     assert len(chart["data"]) == 5
     assert [row["selling_price"] for row in chart["data"]] == sorted((row["selling_price"] for row in chart["data"]), reverse=True)
+
+
+def test_ranking_limit_is_not_duplicated_for_descriptive_dimension_name() -> None:
+    plan = AnalysisPlan(operation="top_n", metric="price", aggregation="mean", group_by=["car_name"], sort="desc", limit=5)
+    interpretation = describe_chart_plan(plan, "Show top 5 car names")
+    assert interpretation["interpreted_as"] == "Top 5 car names by average price"
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "DataPilot AI"
-    app_version: str = "0.6.1-beta"
+    app_version: str = "0.6.2-beta"
     environment: str = "development"
     app_env: str = "development"
     ai_provider: str = "mock"

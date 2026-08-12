@@ -4,7 +4,7 @@
 
 Set `APP_ENV=production`, a random `SECRET_KEY` of at least 32 bytes, a PostgreSQL `DATABASE_URL`, the public `FRONTEND_URL`, and the same origin in `CORS_ORIGINS`. HTTPS is required in production because refresh cookies are emitted with `Secure`. Supply SMTP credentials through secrets and set `EMAIL_PROVIDER=smtp`; the console provider is for local development only. Set `SENTRY_DSN` only when the deployment is permitted to send scrubbed diagnostics to Sentry.
 
-Run `alembic upgrade head` before each application release. Revision `0002` creates SaaS tables and assigns pre-existing records to `LEGACY_WORKSPACE_ID`, preserving local data while preventing new users from claiming it. Revision `0003` adds verification and recovery tokens, invitations, feedback, job retry metadata, and beta administration fields. Revision `0004` adds tenant-scoped feedback-attachment metadata.
+Run `alembic upgrade head` before each application release. Revision `0002` creates SaaS tables and assigns pre-existing records to `LEGACY_WORKSPACE_ID`, preserving local data while preventing new users from claiming it. Revision `0003` adds verification and recovery tokens, invitations, feedback, job retry metadata, and beta administration fields. Revision `0004` adds tenant-scoped feedback-attachment metadata. Revision `0005` adds feedback priority, grouped safe system-error summaries, and system-admin audit records.
 
 Keep dataset storage on a persistent mounted volume; database backups do not contain Parquet files or feedback attachment bodies. Back up the complete storage root together with the database. `DATASET_STORAGE_BACKEND=local` is the supported backend in this release. The S3-compatible settings reserve the configuration contract for a future adapter and do not activate object storage yet.
 
@@ -34,7 +34,7 @@ Passwords use Argon2. Access tokens are short-lived bearer JWTs; opaque refresh 
 
 Login is allowed before email verification so users can finish onboarding. Workspace invitations and externally hosted AI providers require verified email. Local deterministic analytics, local Ollama, and local report generation remain available. Workspace owners must explicitly enable external AI, and the provider-status endpoint explains the effective policy without exposing credentials.
 
-System administration is separate from workspace roles. Grant `is_system_admin` directly in the database through a controlled operational process; there is intentionally no public elevation endpoint. Support lookup returns account and workspace metadata only, never dataset rows.
+System administration is separate from workspace roles. Use `python -m app.cli make-system-admin admin@example.com` or `python -m app.cli remove-system-admin admin@example.com` on a trusted application host; there is intentionally no public elevation endpoint. The CLI requires an existing account, never changes its password, writes an audit record, and protects the last active administrator. Support lookup and `/admin` return metadata only, never dataset rows. See [System Admin Console](admin.md).
 
 ## Beta rollout
 

@@ -37,8 +37,9 @@ async def authenticated_user(credentials: HTTPAuthorizationCredentials | None = 
         return user
 
 
-async def require_system_admin(user=Depends(authenticated_user)):
+async def require_system_admin(request: Request, user=Depends(authenticated_user)):
     if not user.is_system_admin: raise AppError("System administrator access is required.", "SYSTEM_ADMIN_REQUIRED", 403)
+    request.state.user_id = user.id
     return user
 
 

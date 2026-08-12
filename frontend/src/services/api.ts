@@ -14,7 +14,7 @@ export type Member={user_id:string;email:string;display_name:string;role:"owner"
 export type Invitation={id:string;workspace_id:string;email:string;role:"admin"|"member";invited_by_user_id:string;created_at:string;expires_at:string;accepted_at:string|null;revoked_at:string|null;status:"pending"|"accepted"|"expired"|"revoked";delivery_status?:string|null;development_invitation_url?:string|null};
 export type ProviderStatus={app_version:string;configured_provider:string;effective_provider:string;external_ai_enabled:boolean;email_verified:boolean;privacy_notice:string};
 export type FeedbackAttachment={id:string;feedback_id:string;original_filename:string;content_type:string;size:number;created_at:string};
-export type FeedbackItem={id:string;user_id:string;workspace_id:string;category:string;message:string;current_page?:string|null;dataset_id?:string|null;technical_context?:Record<string,unknown>|null;status:string;created_at:string;user_email?:string|null;workspace_name?:string|null;attachments:FeedbackAttachment[]};
+export type FeedbackItem={id:string;user_id:string;workspace_id:string;category:string;message:string;current_page?:string|null;dataset_id?:string|null;technical_context?:Record<string,unknown>|null;status:string;priority?:string;created_at:string;user_email?:string|null;workspace_name?:string|null;attachments:FeedbackAttachment[]};
 
 export function setApiAuth(token: string | null, workspace: string | null) { accessToken = token; workspaceId = workspace; }
 
@@ -65,6 +65,10 @@ export async function getAdminFeedback():Promise<FeedbackItem[]>{return parse(aw
 export async function getAdminDiagnostics():Promise<Record<string,string|boolean|null>>{return parse(await apiFetch("/admin/diagnostics"));}
 export async function getFeedbackAttachment(feedbackId:string,attachmentId:string):Promise<Blob>{const response=await apiFetch(`/admin/feedback/${feedbackId}/attachments/${attachmentId}`);if(!response.ok)await parse(response);return response.blob();}
 export async function supportLookup(query:string):Promise<{results:Array<Record<string,unknown>>}>{return parse(await apiFetch(`/admin/support?q=${encodeURIComponent(query)}`));}
+export async function adminGet<T=Record<string,unknown>>(section:string,params:Record<string,string|number|boolean|undefined>={}):Promise<T>{const query=new URLSearchParams();Object.entries(params).forEach(([key,value])=>{if(value!==undefined&&value!=="")query.set(key,String(value));});return parse(await apiFetch(`/admin/${section}${query.size?`?${query}`:""}`));}
+export async function adminUserAction(userId:string,action:"activate"|"deactivate"|"grant_admin"|"revoke_admin"):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/users/${userId}/actions`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,confirmed:true})}));}
+export async function adminRetryJob(jobId:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/jobs/${jobId}/retry?confirmed=true`,{method:"POST"}));}
+export async function adminUpdateFeedback(feedbackId:string,status:string,priority:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/feedback/${feedbackId}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({status,priority})}));}
 
 export async function inspectWorkbook(file:File):Promise<string[]> { const body=new FormData();body.append("file",file);const result=await parse<{sheets:{name:string}[]}>(await apiFetch("/datasets/inspect",{method:"POST",body}));return result.sheets.map(s=>s.name); }
 export async function uploadDataset(file:File,sheetName?:string):Promise<DatasetMetadata> { const body=new FormData();body.append("file",file);if(sheetName)body.append("sheet_name",sheetName);return parse(await apiFetch("/datasets/upload",{method:"POST",body})); }

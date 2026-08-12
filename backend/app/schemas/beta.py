@@ -41,7 +41,7 @@ class FeedbackAttachmentResponse(BaseModel):
 
 
 class FeedbackResponse(BaseModel):
-    id: str; category: str; message: str; current_page: str | None; dataset_id: str | None; status: str; created_at: datetime
+    id: str; category: str; message: str; current_page: str | None; dataset_id: str | None; status: str; priority: str = "medium"; created_at: datetime
     attachments: list[FeedbackAttachmentResponse] = Field(default_factory=list)
 
 

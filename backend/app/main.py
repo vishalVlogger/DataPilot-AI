@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import auth, beta, datasets, health, history, saas, workspaces
+from app.api.routes import admin, auth, beta, datasets, health, history, saas, workspaces
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.observability import initialize_sentry, request_id_context
@@ -35,6 +35,7 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allo
 app.include_router(health.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(workspaces.router, prefix="/api")
+app.include_router(admin.router, prefix="/api")
 app.include_router(beta.router, prefix="/api")
 app.include_router(saas.router, prefix="/api")
 app.include_router(datasets.router, prefix="/api")
@@ -59,6 +60,8 @@ async def security_and_request_logging(request: Request, call_next):
 
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    from app.services.admin_metrics import record_system_error
+    record_system_error(getattr(request.state, "request_id", None), exc.error_code, request.url.path, request.method, exc.status_code, exc.message, getattr(request.state, "user_id", None), getattr(request.state, "workspace_id", None))
     return JSONResponse(status_code=exc.status_code, content={"success": False, "message": exc.message, "error_code": exc.error_code, "request_id": getattr(request.state, "request_id", None)})
 
 
@@ -71,4 +74,6 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 @app.exception_handler(Exception)
 async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("Unhandled request error", exc_info=exc)
+    from app.services.admin_metrics import record_system_error
+    record_system_error(getattr(request.state, "request_id", None), "INTERNAL_ERROR", request.url.path, request.method, 500, "Unable to process the request.", getattr(request.state, "user_id", None), getattr(request.state, "workspace_id", None))
     return JSONResponse(status_code=500, content={"success": False, "message": "Unable to process the request.", "error_code": "INTERNAL_ERROR", "request_id": getattr(request.state, "request_id", None)})

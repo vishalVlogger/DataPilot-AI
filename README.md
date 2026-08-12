@@ -55,6 +55,8 @@ Register the first account in the UI. Its default workspace uses the Free plan; 
 
 ## Test and build
 
+System administrators use the dedicated `/admin` Platform Console for metadata-only platform operations. Workspace administrators manage one workspace and cannot access this console. See [System Admin Console](docs/admin.md) for routes, privacy boundaries, and audited CLI promotion.
+
 ```powershell
 cd backend
 python -m pytest

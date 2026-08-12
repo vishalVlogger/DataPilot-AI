@@ -236,6 +236,7 @@ class Feedback(Base):
     dataset_id: Mapped[str | None] = mapped_column(ForeignKey("datasets.id", ondelete="SET NULL"), nullable=True, index=True)
     technical_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="new")
+    priority: Mapped[str] = mapped_column(String(20), default="medium")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
@@ -249,4 +250,33 @@ class FeedbackAttachment(Base):
     content_type: Mapped[str] = mapped_column(String(100))
     size: Mapped[int] = mapped_column(Integer)
     storage_key: Mapped[str] = mapped_column(String(500), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class SystemError(Base):
+    __tablename__ = "system_errors"
+    __table_args__ = (UniqueConstraint("error_code", "route", "safe_message", name="uq_system_error_signature"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    request_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    error_code: Mapped[str] = mapped_column(String(80), index=True)
+    route: Mapped[str] = mapped_column(String(255), index=True)
+    method: Mapped[str] = mapped_column(String(10))
+    status_code: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    safe_message: Mapped[str] = mapped_column(String(500))
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class SystemAdminAudit(Base):
+    __tablename__ = "system_admin_audit"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    admin_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(80), index=True)
+    target_type: Mapped[str] = mapped_column(String(50))
+    target_id: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

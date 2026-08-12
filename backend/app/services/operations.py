@@ -36,7 +36,7 @@ def test_redis() -> dict:
     settings = get_settings()
     if not settings.redis_url: return {"status": "skip", "reason": "REDIS_URL is not configured"}
     from redis import Redis
-    redis = Redis.from_url(settings.redis_url, decode_responses=True); prefix = f"datapilot:test:{uuid4()}"
+    redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=1, socket_timeout=1); prefix = f"datapilot:test:{uuid4()}"
     try:
         redis.ping(); redis.incr(f"{prefix}:counter"); redis.rpush(f"{prefix}:queue", "probe"); assert redis.lpop(f"{prefix}:queue") == "probe"
         return {"status": "pass"}
@@ -112,7 +112,8 @@ def infrastructure_status() -> dict:
     try:
         storage = get_object_storage(); result["storage"] = {"status": "ok", "backend": storage.backend}
     except Exception: result["storage"] = {"status": "unavailable", "backend": settings.dataset_storage_backend}
-    if settings.redis_url:
+    redis_required = settings.job_execution_mode.casefold() == "redis" or settings.rate_limit_backend.casefold() == "redis"
+    if redis_required:
         try: result["redis"] = "ok" if test_redis()["status"] == "pass" else "unavailable"
         except Exception: result["redis"] = "unavailable"
     return result

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy import text
 
 from app.core.auth import Principal, authenticated_user, require_auth, require_system_admin
@@ -82,10 +82,10 @@ async def admin_feedback(limit: int = Query(100, ge=1, le=500), _=Depends(requir
 
 
 @router.get("/admin/feedback/{feedback_id}/attachments/{attachment_id}")
-async def admin_feedback_attachment(feedback_id: str, attachment_id: str, _=Depends(require_system_admin)) -> FileResponse:
+async def admin_feedback_attachment(feedback_id: str, attachment_id: str, _=Depends(require_system_admin)) -> Response:
     with session_scope() as session: item = FeedbackRepository(session).get_attachment_for_admin(feedback_id, attachment_id)
-    path = FeedbackAttachmentStorage(get_settings().storage_root).resolve(item.storage_key)
-    return FileResponse(path, media_type=item.content_type, filename=item.original_filename)
+    content = FeedbackAttachmentStorage(get_settings().storage_root).read(item.storage_key)
+    return Response(content, media_type=item.content_type, headers={"Content-Disposition": f'attachment; filename="{item.original_filename}"'})
 
 
 @router.get("/admin/summary", response_model=AdminSummaryResponse)

@@ -27,6 +27,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Workspace(Base):
@@ -39,6 +40,8 @@ class Workspace(Base):
     external_ai_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deletion_scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 
 class WorkspaceMember(Base):
@@ -123,6 +126,7 @@ class DatasetVersion(Base):
     description: Mapped[str] = mapped_column(String(500))
     affected_rows: Mapped[int] = mapped_column(Integer, default=0)
     storage_key: Mapped[str] = mapped_column(String(500))
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     restored_from_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_current: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -199,6 +203,8 @@ class Job(Base):
     last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     retryable: Mapped[bool] = mapped_column(Boolean, default=False)
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     dataset: Mapped[Dataset | None] = relationship(back_populates="jobs")
 
 

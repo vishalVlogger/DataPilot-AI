@@ -2,7 +2,7 @@ services:
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
-    profiles: ["distributed"]
+    profiles: ["staging", "distributed"]
     volumes:
       - redis_data:/data
     healthcheck:
@@ -38,7 +38,7 @@ services:
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       AI_PROVIDER: ${AI_PROVIDER:-mock}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      APP_VERSION: ${APP_VERSION:-0.6.2-beta}
+      APP_VERSION: ${APP_VERSION:-0.7.0-beta}
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
       EMAIL_FROM: ${EMAIL_FROM:-DataPilot AI <no-reply@datapilot.local>}
       FEEDBACK_MAX_ATTACHMENTS: ${FEEDBACK_MAX_ATTACHMENTS:-3}
@@ -53,8 +53,14 @@ services:
       JOB_EXECUTION_MODE: ${JOB_EXECUTION_MODE:-local}
       DATASET_STORAGE_BACKEND: ${DATASET_STORAGE_BACKEND:-local}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_USE_SSL: ${S3_USE_SSL:-true}
       REGISTRATION_MODE: ${REGISTRATION_MODE:-open}
-    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers"]
     volumes:
       - dataset_data:/app/data
     ports:
@@ -68,6 +74,58 @@ services:
       timeout: 5s
       retries: 12
     restart: unless-stopped
+
+  worker:
+    build: ./backend
+    profiles: ["staging", "distributed"]
+    command: ["python", "-m", "app.worker"]
+    environment:
+      APP_ENV: ${APP_ENV:-staging}
+      SECRET_KEY: ${SECRET_KEY:-local-compose-secret-change-before-production-123456}
+      DATABASE_URL: postgresql+psycopg://datapilot:${POSTGRES_PASSWORD:-datapilot-local-only}@postgres:5432/datapilot
+      DATASET_STORAGE_ROOT: /app/data
+      JOB_EXECUTION_MODE: redis
+      REDIS_URL: redis://redis:6379/0
+      DATASET_STORAGE_BACKEND: ${DATASET_STORAGE_BACKEND:-local}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_USE_SSL: ${S3_USE_SSL:-true}
+    volumes:
+      - dataset_data:/app/data
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    profiles: ["minio"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-datapilot}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-datapilot-minio-local-only}
+    volumes: ["minio_data:/data"]
+    ports: ["9000:9000", "9001:9001"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  minio-init:
+    image: minio/mc:latest
+    profiles: ["minio"]
+    depends_on:
+      minio: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} && mc mb --ignore-existing local/$${S3_BUCKET} && mc anonymous set none local/$${S3_BUCKET}"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-datapilot}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-datapilot-minio-local-only}
+      S3_BUCKET: ${S3_BUCKET:-datapilot}
 
   frontend:
     build:
@@ -85,3 +143,4 @@ volumes:
   postgres_data:
   dataset_data:
   redis_data:
+  minio_data:

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Request, Response
+from pydantic import BaseModel
 
 from app.core.auth import authenticated_user
 from app.core.config import get_settings
@@ -10,12 +11,16 @@ from app.core.rate_limit import rate_limiter
 from sqlalchemy import func, select
 
 from app.core.security import create_access_token, hash_one_time_token, hash_password, hash_refresh_token, new_one_time_token, new_refresh_token, normalize_email, verify_password
-from app.models import User
+from app.models import User, Workspace
 from app.repositories import AccountTokenRepository, InvitationRepository, RefreshSessionRepository, UserRepository, WorkspaceRepository
 from app.schemas.saas import AuthResponse, BetaAcknowledgementRequest, CurrentUserResponse, EmailRequest, LoginRequest, RegisterRequest, ResetPasswordRequest, TokenRequest, UserResponse, UserUpdateRequest, WorkspaceResponse
 from app.services.email import send_transactional_email
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+
+class AccountDeletionRequest(BaseModel):
+    password: str
 
 
 async def _send_account_token(user: User, purpose: str) -> tuple[str, str | None]:
@@ -144,3 +149,14 @@ async def acknowledge_beta(payload: BetaAcknowledgementRequest, user=Depends(aut
     if not payload.acknowledged: raise AppError("Beta acknowledgement is required.", "BETA_ACKNOWLEDGEMENT_REQUIRED", 400)
     with session_scope() as session: updated = UserRepository(session).acknowledge_beta(UserRepository(session).get(user.id))
     return UserResponse.model_validate(updated, from_attributes=True)
+
+
+@router.post("/deletion-request", status_code=202)
+async def request_account_deletion(payload: AccountDeletionRequest, user=Depends(authenticated_user)) -> dict:
+    with session_scope() as session:
+        current = UserRepository(session).get(user.id)
+        if not verify_password(current.password_hash, payload.password): raise AppError("Password confirmation is invalid.", "PASSWORD_CONFIRMATION_INVALID", 403)
+        owned = session.scalars(select(Workspace).where(Workspace.owner_user_id == user.id, Workspace.deletion_scheduled_for.is_(None))).all()
+        if owned: raise AppError("Transfer ownership or schedule deletion for owned workspaces first.", "OWNED_WORKSPACES_REMAIN", 409)
+        current.deletion_requested_at = datetime.now(timezone.utc); current.is_active = False; RefreshSessionRepository(session).revoke_all(user.id)
+        return {"status": "scheduled", "requested_at": current.deletion_requested_at}

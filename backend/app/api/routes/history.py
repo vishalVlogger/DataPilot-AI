@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 
 from app.core.auth import current_principal, require_auth
 from app.core.config import get_settings
@@ -130,14 +130,14 @@ async def get_job(job_id: str) -> JobResponse:
 
 
 @router.get("/jobs/{job_id}/result")
-async def get_job_result(job_id: str) -> FileResponse:
+async def get_job_result(job_id: str) -> Response:
     principal = current_principal()
     with session_scope() as session: job = JobRepository(session, principal.workspace_id).get(job_id)
     if job["status"] != "completed" or not job.get("result_reference"): raise AppError("The job result is not ready.", "JOB_NOT_COMPLETE", 409)
-    path = Path(job["result_reference"]).resolve(); root = get_settings().storage_root.resolve()
-    if root not in path.parents or not path.is_file(): raise AppError("The job result is unavailable.", "JOB_RESULT_NOT_FOUND", 404)
-    media_type = "application/pdf" if path.suffix.lower() == ".pdf" else "text/html"
-    return FileResponse(path, media_type=media_type, filename=path.name)
+    from app.services.object_storage import get_object_storage
+    key = job["result_reference"]; content = get_object_storage().get(key)
+    suffix = Path(key).suffix.lower(); media_type = "application/pdf" if suffix == ".pdf" else "application/zip" if suffix == ".zip" else "text/html"
+    return Response(content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{Path(key).name}"'})
 
 
 @router.post("/jobs/{job_id}/retry", response_model=JobResponse)

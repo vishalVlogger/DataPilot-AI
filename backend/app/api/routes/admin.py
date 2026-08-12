@@ -16,6 +16,8 @@ from app.services.cleanup import CleanupService
 from app.services.datasets.storage import DatasetStorage
 from app.services.email import email_delivery_diagnostics
 from app.services.jobs.manager import JobManager
+from app.services.jobs.executor import queue_diagnostics
+from app.services.operations import infrastructure_status
 
 router = APIRouter(prefix="/admin", tags=["system-admin"], dependencies=[Depends(require_system_admin)])
 
@@ -87,27 +89,17 @@ async def usage(days: int = Query(30, ge=1, le=30), _=Depends(require_system_adm
 
 @router.get("/health")
 async def health(_=Depends(require_system_admin)) -> dict:
-    settings = get_settings(); diagnostics = email_delivery_diagnostics(); database = storage = "ok"; redis = "not configured"; optional_failed = False
-    try:
-        with session_scope() as session: session.execute(text("SELECT 1"))
-    except Exception: database = "unavailable"
-    try:
-        root = settings.storage_root.resolve(); root.mkdir(parents=True, exist_ok=True)
-        if not root.is_dir(): raise OSError()
-    except Exception: storage = "unavailable"
-    if settings.redis_url:
-        try:
-            from redis import Redis
-            Redis.from_url(settings.redis_url).ping(); redis = "ok"
-        except Exception: redis = "unavailable"; optional_failed = True
+    settings = get_settings(); diagnostics = email_delivery_diagnostics(); infra = infrastructure_status(); database = infra["database"]; storage = infra["storage"]; redis = infra["redis"]; optional_failed = redis == "unavailable"
     if settings.email_provider == "smtp" and diagnostics.get("status") == "failed": optional_failed = True
-    platform_status = "critical" if "unavailable" in {database, storage} else "degraded" if optional_failed else "healthy"
-    return {"platform_status": platform_status, "api": "ok", "readiness": "ready" if platform_status != "critical" else "not ready", "database": database, "storage": storage, "redis": redis, "email": diagnostics.get("status") or "not attempted", "ai_provider": settings.ai_provider, "app_version": settings.app_version}
+    storage_failed = isinstance(storage, dict) and storage.get("status") == "unavailable"
+    platform_status = "critical" if database == "unavailable" or storage_failed else "degraded" if optional_failed else "healthy"
+    return {"platform_status": platform_status, "api": "ok", "readiness": "ready" if platform_status != "critical" else "not ready", "database": database, "storage": storage, "redis": redis, "worker": infra["worker"], "email": diagnostics.get("status") or "not attempted", "sentry": "configured" if settings.sentry_dsn else "not configured", "ai_provider": settings.ai_provider, "app_version": settings.app_version}
 
 
 @router.get("/jobs")
 async def jobs(status: str | None = Query(None, max_length=20), type: str | None = Query(None, max_length=50), days: int | None = Query(None, ge=1, le=30), paging: tuple[int, int] = Depends(page), _=Depends(require_system_admin)) -> dict:
-    with session_scope() as session: return AdminMetricsService(session).jobs(status, type, days, *paging)
+    with session_scope() as session: result = AdminMetricsService(session).jobs(status, type, days, *paging)
+    result["queue"] = queue_diagnostics(); return result
 
 
 @router.post("/jobs/{job_id}/retry")
@@ -118,7 +110,8 @@ async def retry_job(job_id: str, request: Request, confirmed: bool = False, admi
         if not job: raise AppError("Background job not found.", "JOB_NOT_FOUND", 404)
         if job.type != "report" or not job.retryable or job.status != "failed": raise AppError("This job is not safe to retry.", "JOB_NOT_RETRYABLE", 409)
         workspace_id, user_id = job.workspace_id, job.user_id
-    settings = get_settings(); store = DatasetStorage(settings.storage_root, settings.parquet_compression, workspace_id, user_id)
+    from app.services.datasets.storage import get_dataset_storage
+    settings = get_settings(); store = get_dataset_storage(settings.storage_root, settings.parquet_compression, workspace_id, user_id)
     try: result = JobManager().retry(job_id, store)
     except ValueError as exc: raise AppError(str(exc), "JOB_NOT_RETRYABLE", 409) from exc
     with session_scope() as session: audit_admin(session, admin.id, "job_retry", "job", job_id, request.state.request_id)

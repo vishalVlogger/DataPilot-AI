@@ -29,7 +29,7 @@ class UserResponse(BaseModel):
 
 
 class WorkspaceResponse(BaseModel):
-    id: str; name: str; slug: str; owner_user_id: str; role: Literal["owner", "admin", "member"]; plan_code: str; external_ai_enabled: bool = True; created_at: datetime; updated_at: datetime
+    id: str; name: str; slug: str; owner_user_id: str; role: Literal["owner", "admin", "member"]; plan_code: str; external_ai_enabled: bool = True; created_at: datetime; updated_at: datetime; deletion_requested_at: datetime | None = None; deletion_scheduled_for: datetime | None = None
 
 
 class AuthResponse(BaseModel):

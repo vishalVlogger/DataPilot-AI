@@ -49,4 +49,6 @@ async def require_auth(request: Request, user=Depends(authenticated_user), x_wor
         accessible = workspaces.list_for_user(user.id)
         if not accessible: raise AppError("Workspace not found.", "WORKSPACE_NOT_FOUND", 404)
         selected = workspaces.get_for_user(x_workspace_id, user.id) if x_workspace_id else accessible[0]
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and selected.get("deletion_scheduled_for"):
+            raise AppError("This workspace is read-only while deletion is scheduled.", "WORKSPACE_DELETION_PENDING", 409)
     principal = Principal(user_id=user.id, workspace_id=selected["id"], role=selected["role"]); _principal.set(principal); request.state.user_id = user.id; request.state.workspace_id = selected["id"]; return principal

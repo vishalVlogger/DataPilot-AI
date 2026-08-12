@@ -121,3 +121,6 @@ class JobRepository(ScopedRepository):
         if model is None: raise AppError("Background job not found.", "JOB_NOT_FOUND", 404)
         for key, value in values.items(): setattr(model, key, value)
         self.session.commit(); return _dict(model)
+    def active_by_idempotency(self, key: str) -> dict[str, Any] | None:
+        model = self.session.scalar(select(Job).where(Job.workspace_id == self.workspace_id, Job.idempotency_key == key, Job.status.in_(["queued", "running", "retrying"])).order_by(Job.created_at.desc()))
+        return _dict(model) if model else None

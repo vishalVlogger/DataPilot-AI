@@ -1,11 +1,8 @@
-from pathlib import Path
-
 from fastapi import APIRouter
-from sqlalchemy import text
 
 from app.core.config import get_settings
-from app.core.database import session_scope
 from app.core.errors import AppError
+from app.services.operations import infrastructure_status
 
 router = APIRouter()
 
@@ -16,15 +13,9 @@ async def health() -> dict[str, str]:
 
 
 @router.get("/ready")
-async def readiness() -> dict[str, str]:
-    try:
-        with session_scope() as session: session.execute(text("SELECT 1"))
-        settings = get_settings(); root: Path = settings.storage_root.resolve(); root.mkdir(parents=True, exist_ok=True)
-        if not root.is_dir(): raise OSError("storage root is not a directory")
-        if settings.rate_limit_backend == "redis":
-            if not settings.redis_url: raise OSError("Redis is required but not configured")
-            from redis import Redis
-            Redis.from_url(settings.redis_url).ping()
-    except Exception as exc:
-        raise AppError("A required service is unavailable.", "SERVICE_NOT_READY", 503) from exc
-    return {"status": "ready", "database": "ok", "storage": "ok", "rate_limit": get_settings().rate_limit_backend}
+async def readiness() -> dict:
+    status = infrastructure_status(); settings = get_settings(); storage_ok = isinstance(status["storage"], dict) and status["storage"].get("status") == "ok"
+    redis_required = settings.rate_limit_backend == "redis" or settings.job_execution_mode == "redis"
+    if status["database"] != "ok" or not storage_ok or (redis_required and status["redis"] != "ok"):
+        raise AppError("A required service is unavailable.", "SERVICE_NOT_READY", 503)
+    return {"status": "ready", **status}

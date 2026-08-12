@@ -5,7 +5,7 @@ let accessToken: string | null = null;
 let workspaceId: string | null = null;
 
 export type User = { id:string; email:string; display_name:string; is_active:boolean; is_system_admin:boolean; email_verified_at:string|null; beta_acknowledged_at:string|null; created_at:string; last_login_at:string|null };
-export type Workspace = { id:string; name:string; slug:string; role:"owner"|"admin"|"member"; owner_user_id:string; plan_code:string; external_ai_enabled:boolean; created_at:string; updated_at:string };
+export type Workspace = { id:string; name:string; slug:string; role:"owner"|"admin"|"member"; owner_user_id:string; plan_code:string; external_ai_enabled:boolean; created_at:string; updated_at:string; deletion_requested_at:string|null; deletion_scheduled_for:string|null };
 export type AuthPayload = { access_token:string; expires_in:number; user:User; workspaces:Workspace[]; email_delivery_status?:string|null; development_verification_url?:string|null };
 export type Usage = { plan_code:string; datasets:number; storage_bytes:number; analyses_this_month:number; ai_requests_this_month:number; reports_this_month:number; rows_this_month:number; limits:Record<string,number>; percentages:Record<string,number> };
 export type Activity = { id:string; activity_type:string; user_id:string|null; resource_id:string|null; details:Record<string,unknown>|null; created_at:string };
@@ -40,6 +40,10 @@ export async function logout():Promise<void> { const response=await apiFetch("/a
 export async function getMe():Promise<{user:User;workspaces:Workspace[]}> { return parse(await apiFetch("/auth/me")); }
 export async function listWorkspaces():Promise<Workspace[]> { return parse(await apiFetch("/workspaces")); }
 export async function updateWorkspace(id:string, values:{name?:string;slug?:string;external_ai_enabled?:boolean}):Promise<Workspace> { return parse(await apiFetch(`/workspaces/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(values)})); }
+export async function exportWorkspace(id:string,includeRawDatasets=false):Promise<{job_id:string;status:string}>{return parse(await apiFetch(`/workspaces/${id}/export`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({include_raw_datasets:includeRawDatasets})}));}
+export async function requestWorkspaceDeletion(id:string,confirmation:string):Promise<{deletion_scheduled_for:string}>{return parse(await apiFetch(`/workspaces/${id}/deletion-request`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({confirmation,export_first:false})}));}
+export async function cancelWorkspaceDeletion(id:string):Promise<{cancelled:boolean}>{return parse(await apiFetch(`/workspaces/${id}/deletion-request`,{method:"DELETE"}));}
+export async function requestAccountDeletion(password:string):Promise<{status:string;requested_at:string}>{return parse(await apiFetch("/auth/deletion-request",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password})}));}
 export async function updateUser(displayName:string):Promise<User> { return parse(await apiFetch("/auth/me",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({display_name:displayName})})); }
 export async function verifyEmail(token:string):Promise<{message:string}>{return parse(await apiFetch("/auth/verify-email",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token})}));}
 export async function resendVerification():Promise<{message:string;delivery_status:string|null;development_verification_url:string|null}>{return parse(await apiFetch("/auth/resend-verification",{method:"POST"}));}

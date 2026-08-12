@@ -368,7 +368,7 @@ class JobResponse(BaseModel):
     id: str
     type: str
     dataset_id: str | None
-    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    status: Literal["queued", "running", "retrying", "completed", "failed", "cancelled"]
     stage: str
     progress: int | None
     created_at: datetime

@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "DataPilot AI"
-    app_version: str = "0.6.2-beta"
+    app_version: str = "0.7.0-beta"
     environment: str = "development"
     app_env: str = "development"
     ai_provider: str = "mock"
@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
     s3_region: str | None = None
+    s3_use_ssl: bool = True
+    job_queue_name: str = "datapilot:jobs"
+    job_queue_backlog_alert: int = 100
+    worker_heartbeat_ttl_seconds: int = 60
+    trust_proxy_headers: bool = False
+    deletion_grace_days: int = 7
+    alert_provider: str = "log"
+    alert_cooldown_seconds: int = 900
     activity_retention_days: int = 180
     job_retention_days: int = 90
     refresh_session_retention_days: int = 30
@@ -100,6 +108,26 @@ class Settings(BaseSettings):
     def expose_development_email_links(self) -> bool:
         return self.email_provider.casefold() == "console" and (self.app_env or self.environment).casefold() in {"development", "local", "test"}
 
+    @property
+    def environment_name(self) -> str:
+        return (self.app_env or self.environment).casefold()
+
+    def readiness_errors(self) -> list[str]:
+        errors: list[str] = []
+        if self.environment_name not in {"development", "test", "staging", "production"}: errors.append("APP_ENV must be development, test, staging, or production.")
+        if self.job_execution_mode.casefold() not in {"local", "redis"}: errors.append("JOB_EXECUTION_MODE must be local or redis.")
+        if self.dataset_storage_backend.casefold() not in {"local", "s3"}: errors.append("DATASET_STORAGE_BACKEND must be local or s3.")
+        if self.job_execution_mode.casefold() == "redis" and not self.redis_url: errors.append("REDIS_URL is required for Redis job execution.")
+        if self.dataset_storage_backend.casefold() == "s3":
+            if not self.s3_bucket: errors.append("S3_BUCKET is required for S3 storage.")
+            if not self.s3_access_key_id or not self.s3_secret_access_key: errors.append("S3 credentials are required for S3 storage.")
+        if self.environment_name == "production":
+            if self.secret_key.startswith(("development-only", "replace-with")) or len(self.secret_key) < 32: errors.append("SECRET_KEY must be a strong production secret.")
+            if not self.secure_cookies: errors.append("Secure cookies are required in production.")
+            if self.email_provider.casefold() == "console": errors.append("Console email is not allowed in production.")
+            if not self.database_url.startswith("postgresql"): errors.append("PostgreSQL is required in production.")
+            if "*" in self.cors_origin_list: errors.append("Wildcard CORS is not allowed with credentials in production.")
+        return errors
 
 @lru_cache
 def get_settings() -> Settings:

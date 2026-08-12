@@ -1,4 +1,5 @@
 import json
+import hashlib
 import shutil
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -82,7 +83,7 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
         (folder / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
         with session_scope() as session:
             DatasetRepository(session, self.workspace_id).create(id=dataset_id, uploader_user_id=self.user_id, name=Path(name).name, original_filename=Path(name).name, source_type=source_type, sheet_name=sheet_name, row_count=len(frame), column_count=len(frame.columns), created_at=now, updated_at=now, current_version=0, storage_format="parquet", storage_key=metadata["storage_key"], status="ready", storage_bytes=storage_bytes)
-            DatasetVersionRepository(session, self.workspace_id).create(dataset_id=dataset_id, version=0, operation="upload", description="Original uploaded dataset", affected_rows=0, storage_key=metadata["storage_key"], is_current=True)
+            DatasetVersionRepository(session, self.workspace_id).create(dataset_id=dataset_id, version=0, operation="upload", description="Original uploaded dataset", affected_rows=0, storage_key=metadata["storage_key"], checksum_sha256=hashlib.sha256(version_path.read_bytes()).hexdigest(), is_current=True)
         return metadata
 
     def _legacy_metadata(self, dataset_id: str) -> dict[str, Any]:
@@ -164,7 +165,7 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
         path = self._folder(dataset_id) / "versions" / f"version_{version}.parquet"; self._write_parquet(frame, path)
         key = str(path.relative_to(self.root)).replace("\\", "/")
         with session_scope() as session:
-            DatasetVersionRepository(session, self.workspace_id).create(dataset_id=dataset_id, version=version, operation=operation, description=description, affected_rows=affected_rows, storage_key=key, restored_from_version=source_version if operation == "restore" else None, is_current=True)
+            DatasetVersionRepository(session, self.workspace_id).create(dataset_id=dataset_id, version=version, operation=operation, description=description, affected_rows=affected_rows, storage_key=key, checksum_sha256=hashlib.sha256(path.read_bytes()).hexdigest(), restored_from_version=source_version if operation == "restore" else None, is_current=True)
             DatasetRepository(session, self.workspace_id).update_storage(dataset_id, sum(item.stat().st_size for item in self._folder(dataset_id).rglob("*") if item.is_file()))
         return version
 
@@ -206,9 +207,50 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
 LocalDatasetStorage = LocalParquetDatasetStorage
 
 
+class S3DatasetStorage(LocalParquetDatasetStorage):
+    """S3-backed datasets with a private local cache for Pandas and DuckDB scanning."""
+    def __init__(self, root: Path, compression: str | None = None, workspace_id: str | None = None, user_id: str | None = None) -> None:
+        super().__init__(root / ".s3-cache", compression, workspace_id, user_id)
+        from app.services.object_storage import S3ObjectStorage
+        self.objects = S3ObjectStorage()
+
+    def _key(self, dataset_id: str, version: int) -> str:
+        return f"workspaces/{self.workspace_id}/datasets/{dataset_id}/versions/{version}.parquet"
+
+    def _sync_version(self, dataset_id: str, version: int, path: Path) -> None:
+        key = self._key(dataset_id, version); checksum = self.objects.put(key, path.read_bytes(), "application/vnd.apache.parquet")
+        with session_scope() as session:
+            record = DatasetVersionRepository(session, self.workspace_id).get(dataset_id, version); record.storage_key = key; record.checksum_sha256 = checksum
+            dataset = DatasetRepository(session, self.workspace_id).get(dataset_id)
+            if version == dataset.current_version: dataset.storage_key = key
+            session.commit()
+
+    def save(self, frame: pd.DataFrame, name: str, source_type: str, sheet_name: str | None, original_content: bytes | None = None) -> dict[str, Any]:
+        metadata = super().save(frame, name, source_type, sheet_name, original_content); path = super().get_dataset_path(metadata["id"], 0); self._sync_version(metadata["id"], 0, path)
+        metadata["storage_key"] = self._key(metadata["id"], 0); return metadata
+
+    def get_dataset_path(self, dataset_id: str, version: int | None = None) -> Path:
+        self._ensure_database_record(dataset_id); selected = self.current_version(dataset_id) if version is None else version
+        with session_scope() as session: record = DatasetVersionRepository(session, self.workspace_id).get(dataset_id, selected)
+        cache = self._folder(dataset_id) / "versions" / f"version_{selected}.parquet"
+        if not cache.is_file(): cache.parent.mkdir(parents=True, exist_ok=True); cache.write_bytes(self.objects.get(record.storage_key))
+        if record.checksum_sha256 and hashlib.sha256(cache.read_bytes()).hexdigest() != record.checksum_sha256:
+            cache.unlink(missing_ok=True); raise AppError("Dataset checksum verification failed.", "STORAGE_CHECKSUM_MISMATCH", 503)
+        return cache
+
+    def create_version(self, dataset_id: str, frame: pd.DataFrame, operation: str, description: str, affected_rows: int = 0, source_version: int | None = None) -> int:
+        version = super().create_version(dataset_id, frame, operation, description, affected_rows, source_version); self._sync_version(dataset_id, version, super().get_dataset_path(dataset_id, version)); return version
+
+    def delete_dataset(self, dataset_id: str) -> None:
+        keys = list(self.objects.list(f"workspaces/{self.workspace_id}/datasets/{dataset_id}/"))
+        super().delete_dataset(dataset_id)
+        for key in keys: self.objects.delete(key)
+
+
 def get_dataset_storage(*args, **kwargs) -> DatasetStorageBackend:
     backend = get_settings().dataset_storage_backend.casefold()
     if backend == "local": return LocalDatasetStorage(*args, **kwargs)
+    if backend == "s3": return S3DatasetStorage(*args, **kwargs)
     raise AppError("Configured dataset storage backend is unavailable.", "STORAGE_BACKEND_UNAVAILABLE", 503)
 
 

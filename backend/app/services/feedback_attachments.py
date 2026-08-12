@@ -3,6 +3,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.errors import AppError
+from app.services.object_storage import get_object_storage
 
 
 ALLOWED_TYPES: dict[str, set[str]] = {
@@ -46,29 +47,21 @@ def validate_feedback_attachment(filename: str, content_type: str | None, conten
 
 class FeedbackAttachmentStorage:
     def __init__(self, root: Path) -> None:
-        self.root = root.resolve()
+        self.root = root.resolve(); self.objects = get_object_storage()
 
-    def save(self, workspace_id: str, feedback_id: str, safe_filename: str, content: bytes) -> tuple[str, str, Path]:
+    def save(self, workspace_id: str, feedback_id: str, safe_filename: str, content: bytes) -> tuple[str, str, str]:
         for value in (workspace_id, feedback_id):
             if not value or any(character not in "0123456789abcdef-" for character in value.casefold()):
                 raise AppError("Feedback attachment target is invalid.", "FEEDBACK_ATTACHMENT_TARGET_INVALID", 400)
         attachment_id = str(uuid4())
-        folder = (self.root / "workspaces" / workspace_id / "feedback" / feedback_id / attachment_id).resolve()
-        if self.root not in folder.parents:
-            raise AppError("Feedback attachment target is invalid.", "FEEDBACK_ATTACHMENT_TARGET_INVALID", 400)
-        folder.mkdir(parents=True, exist_ok=False)
-        path = folder / safe_filename
-        path.write_bytes(content)
-        return attachment_id, str(path.relative_to(self.root)).replace("\\", "/"), path
+        key = f"workspaces/{workspace_id}/feedback/{feedback_id}/{attachment_id}/{safe_filename}"
+        self.objects.put(key, content); return attachment_id, key, key
 
     def resolve(self, storage_key: str) -> Path:
-        path = (self.root / storage_key).resolve()
-        if self.root not in path.parents or not path.is_file():
-            raise AppError("Feedback attachment is unavailable.", "FEEDBACK_ATTACHMENT_NOT_FOUND", 404)
-        return path
+        from app.services.object_storage import LocalObjectStorage
+        if not isinstance(self.objects, LocalObjectStorage): raise AppError("Direct paths are unavailable for object storage.", "STORAGE_PATH_UNAVAILABLE", 409)
+        return self.objects.path(storage_key)
 
-    def remove(self, path: Path) -> None:
-        if path.is_file():
-            path.unlink()
-        if path.parent.is_dir():
-            path.parent.rmdir()
+    def read(self, storage_key: str) -> bytes: return self.objects.get(storage_key)
+
+    def remove(self, key: str | Path) -> None: self.objects.delete(str(key).replace("\\", "/"))

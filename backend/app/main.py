@@ -28,9 +28,15 @@ logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 logger = logging.getLogger("datapilot")
 settings = get_settings()
 initialize_sentry(settings.sentry_dsn, settings.app_env or settings.environment)
-if settings.secure_cookies and settings.secret_key.startswith("development-only-change-me"):
-    raise RuntimeError("SECRET_KEY must be configured outside development")
+if settings.environment_name == "production":
+    readiness_errors = settings.readiness_errors()
+    if readiness_errors:
+        raise RuntimeError("Unsafe production configuration: " + " ".join(readiness_errors))
 app = FastAPI(title=settings.app_name, version=settings.app_version)
+if settings.trust_proxy_headers:
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(health.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")

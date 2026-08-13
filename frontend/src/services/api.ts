@@ -14,7 +14,8 @@ export type Member={user_id:string;email:string;display_name:string;role:"owner"
 export type Invitation={id:string;workspace_id:string;email:string;role:"admin"|"member";invited_by_user_id:string;created_at:string;expires_at:string;accepted_at:string|null;revoked_at:string|null;status:"pending"|"accepted"|"expired"|"revoked";delivery_status?:string|null;development_invitation_url?:string|null};
 export type ProviderStatus={app_version:string;configured_provider:string;effective_provider:string;external_ai_enabled:boolean;email_verified:boolean;privacy_notice:string};
 export type FeedbackAttachment={id:string;feedback_id:string;original_filename:string;content_type:string;size:number;created_at:string};
-export type FeedbackItem={id:string;user_id:string;workspace_id:string;category:string;message:string;current_page?:string|null;dataset_id?:string|null;technical_context?:Record<string,unknown>|null;status:string;priority?:string;created_at:string;user_email?:string|null;workspace_name?:string|null;attachments:FeedbackAttachment[]};
+export type FeedbackItem={id:string;user_id:string;workspace_id:string;category:string;message:string;current_page?:string|null;dataset_id?:string|null;technical_context?:Record<string,unknown>|null;status:string;priority?:string;feature_area?:string|null;severity?:string;affected_flow?:string|null;resolved_at?:string|null;created_at:string;user_email?:string|null;workspace_name?:string|null;attachments:FeedbackAttachment[]};
+export type NotificationItem={id:string;type:string;title:string;message:string;resource_type?:string|null;resource_id?:string|null;read_at?:string|null;created_at:string};
 
 export function setApiAuth(token: string | null, workspace: string | null) { accessToken = token; workspaceId = workspace; }
 
@@ -63,7 +64,10 @@ export async function acceptInvitation(token:string):Promise<Invitation>{return 
 export async function getProviderStatus():Promise<ProviderStatus>{return parse(await apiFetch("/ai/provider-status"));}
 export async function submitFeedback(values:{category:string;message:string;current_page?:string;dataset_id?:string;include_technical_context:boolean;request_id?:string;route?:string;error_code?:string;user_agent?:string;feature_area?:string;severity?:string;affected_flow?:string}):Promise<{id:string}>{return parse(await apiFetch("/feedback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(values)}));}
 export async function getFeedbackConfig():Promise<{max_attachments:number;max_attachment_mb:number;accepted_extensions:string[]}>{return parse(await apiFetch("/feedback/config"));}
+export async function getMyFeedback():Promise<FeedbackItem[]>{return parse(await apiFetch("/feedback/mine"));}
 export async function uploadFeedbackAttachments(feedbackId:string,files:File[]):Promise<FeedbackAttachment[]>{const body=new FormData();files.forEach(file=>body.append("files",file));return parse(await apiFetch(`/feedback/${feedbackId}/attachments`,{method:"POST",body}));}
+export async function getNotifications():Promise<{items:NotificationItem[];unread_count:number}>{return parse(await apiFetch("/notifications"));}
+export async function markNotificationRead(id:string):Promise<{id:string;read_at:string}>{return parse(await apiFetch(`/notifications/${id}/read`,{method:"PATCH"}));}
 export async function getAdminSummary():Promise<Record<string,number>>{return parse(await apiFetch("/admin/summary"));}
 export async function getAdminFeedback():Promise<FeedbackItem[]>{return parse(await apiFetch("/admin/feedback"));}
 export async function getAdminDiagnostics():Promise<Record<string,string|boolean|null>>{return parse(await apiFetch("/admin/diagnostics"));}

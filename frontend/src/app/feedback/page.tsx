@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/auth/AuthContext";
 import {
   getFeedbackConfig,
+  getMyFeedback,
+  FeedbackItem,
   submitFeedback,
   uploadFeedbackAttachments,
 } from "@/services/api";
@@ -45,11 +47,12 @@ export default function FeedbackPage() {
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [recentError, setRecentError] = useState<ErrorContext | null>(null);
+  const [submitted, setSubmitted] = useState<FeedbackItem[]>([]);
   useEffect(() => {
     if (!auth.loading && !auth.user) router.replace("/login");
     if (auth.user)
-      getFeedbackConfig()
-        .then(setLimits)
+      Promise.all([getFeedbackConfig(), getMyFeedback()])
+        .then(([config, feedback]) => { setLimits(config); setSubmitted(feedback); })
         .catch(() => undefined);
     const raw = sessionStorage.getItem("datapilot_last_error");
     if (raw)
@@ -116,6 +119,7 @@ export default function FeedbackPage() {
       setRecentError(null);
       sessionStorage.removeItem("datapilot_last_error");
       setSuccess("Thanks—your beta feedback and attachments were submitted.");
+      setSubmitted(await getMyFeedback());
     } catch (reason) {
       const detail =
         reason instanceof Error ? reason.message : "Unable to send feedback";
@@ -155,6 +159,19 @@ export default function FeedbackPage() {
           {error}
         </div>
       )}
+      <section className="feedback-history panel" aria-labelledby="feedback-history-title">
+        <div className="feedback-history-heading">
+          <div><p className="eyebrow">YOUR REQUESTS</p><h2 id="feedback-history-title">Feedback status</h2></div>
+          <small>We’ll notify you here and by email when an item is resolved.</small>
+        </div>
+        {submitted.length ? <div className="feedback-history-list">{submitted.map((item) => (
+          <article key={item.id} className={item.status === "resolved" ? "resolved" : ""}>
+            <div><span className={`status-badge ${item.status}`}>{item.status}</span><time>{new Date(item.created_at).toLocaleDateString()}</time></div>
+            <p>{item.message}</p>
+            {item.resolved_at && <small>Resolved {new Date(item.resolved_at).toLocaleString()}</small>}
+          </article>
+        ))}</div> : <div className="empty-state">You haven’t submitted feedback in this workspace yet.</div>}
+      </section>
       <form className="panel settings-form" onSubmit={submit}>
         <label>
           Category

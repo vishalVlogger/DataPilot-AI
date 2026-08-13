@@ -1,6 +1,6 @@
 from sqlalchemy import select
 
-from app.models import Feedback, Job, SystemAdminAudit, User
+from app.models import Feedback, Job, Notification, SystemAdminAudit, User
 
 
 def register(client, email: str, name: str = "Admin Test") -> tuple[dict, dict[str, str]]:
@@ -66,13 +66,28 @@ def test_feedback_filters_workflow_support_and_business_are_safe(anonymous_clien
     filtered = anonymous_client.get("/api/admin/feedback?category=bug&status=new&limit=5", headers=headers).json()
     assert filtered["total"] == 1 and filtered["items"][0]["priority"] == "medium"
     updated = anonymous_client.patch(f"/api/admin/feedback/{created['id']}", headers=headers, json={"status": "resolved", "priority": "high"})
-    assert updated.status_code == 200 and updated.json()["status"] == "resolved" and updated.json()["priority"] == "high"
+    assert updated.status_code == 200 and updated.json()["status"] == "resolved" and updated.json()["priority"] == "high" and updated.json()["user_notified"] is True
+    open_feedback = anonymous_client.get("/api/admin/feedback?limit=5", headers=headers).json()
+    assert open_feedback["total"] == 0 and open_feedback["items"] == [] and open_feedback["status_counts"]["resolved"] == 1
     reflected = anonymous_client.get("/api/admin/feedback?status=resolved&limit=5", headers=headers).json()
     assert reflected["total"] == 1 and reflected["items"][0]["id"] == created["id"] and reflected["items"][0]["status"] == "resolved"
+    mine = anonymous_client.get("/api/feedback/mine", headers=headers).json()
+    assert mine[0]["id"] == created["id"] and mine[0]["resolved_at"]
+    notifications = anonymous_client.get("/api/notifications", headers=headers).json()
+    assert notifications["unread_count"] == 1 and notifications["items"][0]["resource_id"] == created["id"]
+    notification_id = notifications["items"][0]["id"]
+    _, other_headers = register(anonymous_client, "other-feedback-user@example.com")
+    assert anonymous_client.get("/api/notifications", headers=other_headers).json()["unread_count"] == 0
+    assert anonymous_client.patch(f"/api/notifications/{notification_id}/read", headers=other_headers).status_code == 404
+    assert anonymous_client.patch(f"/api/notifications/{notification_id}/read", headers=headers).status_code == 200
+    assert anonymous_client.get("/api/notifications", headers=headers).json()["unread_count"] == 0
+    repeated = anonymous_client.patch(f"/api/admin/feedback/{created['id']}", headers=headers, json={"status": "resolved", "priority": "high"})
+    assert repeated.json()["user_notified"] is False
     from app.core.database import session_scope
     with session_scope() as session:
         persisted = session.get(Feedback, created["id"])
         assert persisted.status == "resolved" and persisted.priority == "high"
+        assert len(session.scalars(select(Notification).where(Notification.resource_id == created["id"])).all()) == 1
     support = anonymous_client.get("/api/admin/support?q=support-admin", headers=headers)
     assert support.status_code == 200 and support.json()["results"]
     audit = anonymous_client.get("/api/admin/audit", headers=headers).json()["items"]

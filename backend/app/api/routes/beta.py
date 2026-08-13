@@ -43,6 +43,12 @@ async def feedback_config(_: Principal = Depends(require_auth)) -> dict:
     return {"max_attachments": settings.feedback_max_attachments, "max_attachment_mb": settings.feedback_max_attachment_mb, "accepted_extensions": [".png", ".jpg", ".jpeg", ".webp", ".pdf", ".txt", ".log"]}
 
 
+@router.get("/feedback/mine", response_model=list[FeedbackResponse])
+async def my_feedback(limit: int = Query(50, ge=1, le=100), principal: Principal = Depends(require_auth)) -> list[FeedbackResponse]:
+    with session_scope() as session:
+        return [FeedbackResponse.model_validate(item) for item in FeedbackRepository(session).list_owned(principal.workspace_id, principal.user_id, limit)]
+
+
 @router.post("/feedback/{feedback_id}/attachments", response_model=list[FeedbackAttachmentResponse], status_code=201)
 async def upload_feedback_attachments(feedback_id: str, files: list[UploadFile] = File(...), principal: Principal = Depends(require_auth)) -> list[FeedbackAttachmentResponse]:
     settings = get_settings()

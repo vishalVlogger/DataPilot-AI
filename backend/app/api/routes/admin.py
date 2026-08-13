@@ -9,12 +9,12 @@ from app.core.auth import require_system_admin
 from app.core.config import get_settings
 from app.core.database import session_scope
 from app.core.errors import AppError
-from app.models import Feedback, Job, SystemAdminAudit, SystemError, UsageEvent, User, Workspace
+from app.models import Feedback, Job, Notification, SystemAdminAudit, SystemError, UsageEvent, User, Workspace
 from app.repositories import AdminRepository, FeedbackRepository
 from app.services.admin_metrics import AdminMetricsService, audit_admin, model_dict
 from app.services.cleanup import CleanupService
 from app.services.datasets.storage import DatasetStorage
-from app.services.email import email_delivery_diagnostics
+from app.services.email import email_delivery_diagnostics, send_transactional_email
 from app.services.jobs.manager import JobManager
 from app.services.jobs.executor import queue_diagnostics
 from app.services.operations import infrastructure_status
@@ -141,22 +141,37 @@ async def feedback(request: Request, category: str | None = Query(None, max_leng
         query = select(Feedback)
         if category: query = query.where(Feedback.category == category)
         if status: query = query.where(Feedback.status == status)
+        else: query = query.where(Feedback.status != "resolved")
         total = int(session.scalar(select(func.count()).select_from(query.subquery())) or 0)
         ids = session.scalars(query.order_by(Feedback.created_at.desc()).limit(limit).offset(offset)).all()
         all_items = {item["id"]: item for item in FeedbackRepository(session).list_all(limit + offset)}
         items = [all_items[item.id] for item in ids]
         # Compatibility for the Milestone 6 support client; the 6.2 console always sends pagination.
-        return items if not request.url.query else {"items": items, "total": total, "limit": limit, "offset": offset}
+        status_counts = {value: int(session.scalar(select(func.count()).select_from(Feedback).where(Feedback.status == value)) or 0) for value in ("new", "reviewing", "planned", "resolved")}
+        return items if not request.url.query else {"items": items, "total": total, "limit": limit, "offset": offset, "status_counts": status_counts}
 
 
 @router.patch("/feedback/{feedback_id}")
 async def update_feedback(feedback_id: str, payload: FeedbackWorkflowRequest, request: Request, admin=Depends(require_system_admin)) -> dict:
+    recipient = None; created_notification = False
     with session_scope() as session:
         item = session.get(Feedback, feedback_id)
         if not item: raise AppError("Feedback not found.", "FEEDBACK_NOT_FOUND", 404)
+        was_resolved = item.status == "resolved"
         item.status = payload.status; item.priority = payload.priority
-        audit_admin(session, admin.id, "feedback_status_change", "feedback", feedback_id, request.state.request_id, {"status": payload.status, "priority": payload.priority})
-        return {"id": item.id, "status": item.status, "priority": item.priority}
+        item.resolved_at = datetime.now(timezone.utc) if payload.status == "resolved" else None
+        if payload.status == "resolved" and not was_resolved:
+            session.add(Notification(user_id=item.user_id, workspace_id=item.workspace_id, type="feedback_resolved", title="Your feedback was resolved", message="Thanks for helping improve DataPilot. Your feedback has been reviewed and marked as resolved.", resource_type="feedback", resource_id=item.id))
+            target = session.get(User, item.user_id); recipient = target.email if target else None; created_notification = True
+        audit_admin(session, admin.id, "feedback_status_change", "feedback", feedback_id, request.state.request_id, {"status": payload.status, "priority": payload.priority, "user_notified": created_notification})
+        result = {"id": item.id, "status": item.status, "priority": item.priority, "resolved_at": item.resolved_at, "user_notified": created_notification}
+    if recipient and created_notification:
+        try:
+            await send_transactional_email(recipient, "Your DataPilot feedback was resolved", "Thanks for helping improve DataPilot. Your feedback has been reviewed and marked as resolved. Sign in to view its status.", "feedback_resolved")
+        except Exception:
+            # The durable in-app notification remains available if email delivery is temporarily unavailable.
+            pass
+    return result
 
 
 @router.get("/support")

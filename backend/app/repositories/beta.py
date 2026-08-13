@@ -122,6 +122,9 @@ class FeedbackRepository:
             result.update({"user_email": user.email if user else None, "workspace_name": workspace.name if workspace else None, "attachments": self.attachments(item.id)})
             results.append(result)
         return results
+    def list_owned(self, workspace_id: str, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        items = self.session.scalars(select(Feedback).where(Feedback.workspace_id == workspace_id, Feedback.user_id == user_id).order_by(Feedback.created_at.desc()).limit(limit)).all()
+        return [{**model_dict(item), "attachments": self.attachments(item.id)} for item in items]
 
 
 class AdminRepository:

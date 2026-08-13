@@ -589,9 +589,9 @@ export default function AdminConsole({
                   value={filter}
                   onChange={(event) => setFilter(event.target.value)}
                 >
-                  <option value="">All statuses</option>
+                  <option value="">Open feedback</option>
                   {["new", "reviewing", "planned", "resolved"].map((value) => (
-                    <option key={value}>{value}</option>
+                    <option key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</option>
                   ))}
                 </select>
               ) : (
@@ -973,29 +973,40 @@ function AdminSection({
     );
   if (section === "feedback")
     return (
-      <section className="admin-feedback-list">
+      <section className="admin-feedback-workspace">
+        <div className="admin-feedback-summary" aria-label="Feedback by status">
+          {(["new", "reviewing", "planned", "resolved"] as const).map((status) => (
+            <article key={status} className={status}>
+              <span>{status}</span>
+              <strong>{valueText((data.status_counts as Json | undefined)?.[status] ?? 0)}</strong>
+            </article>
+          ))}
+        </div>
+        <div className="admin-feedback-list">
         {items.length ? (
           items.map((item) => (
-            <article className="admin-card" key={String(item.id)}>
-              <div className="feedback-meta">
-                <div>
+            <article className={`admin-card feedback-ticket ${item.status}`} key={String(item.id)}>
+              <div className="feedback-ticket-head">
+                <div className="feedback-ticket-identity">
+                  <span className="feedback-ticket-id">#{String(item.id).slice(0, 8)}</span>
                   <span className={`status-badge ${item.status}`}>
                     {valueText(item.status)}
-                  </span>{" "}
-                  <span className="status-badge">
-                    {valueText(item.priority)} priority
-                  </span>{" "}
-                  <span className="status-badge">
-                    {valueText(item.category)}
                   </span>
                 </div>
                 <small>{valueText(item.created_at)}</small>
               </div>
-              <h2>{valueText(item.message)}</h2>
-              <p>
-                {valueText(item.user_email)} ·{" "}
-                {valueText(item.workspace_name ?? item.workspace_id)}
-              </p>
+              <div className="feedback-ticket-body">
+                <div className="feedback-ticket-content">
+                  <div className="feedback-ticket-labels">
+                    <span>{valueText(item.category).replaceAll("_", " ")}</span>
+                    {Boolean(item.feature_area) && <span>{valueText(item.feature_area)}</span>}
+                    <span className={`severity-${item.severity ?? "medium"}`}>{valueText(item.severity ?? "medium")} severity</span>
+                  </div>
+                  <p className="feedback-message">{valueText(item.message)}</p>
+                  <div className="feedback-requester">
+                    <span aria-hidden="true">{String(item.user_email ?? "?")[0].toUpperCase()}</span>
+                    <div><strong>{valueText(item.user_email)}</strong><small>{valueText(item.workspace_name ?? item.workspace_id)}{item.affected_flow ? ` · ${valueText(item.affected_flow)}` : ""}</small></div>
+                  </div>
               {Boolean(item.technical_context) && (
                 <details>
                   <summary>Technical context and request reference</summary>
@@ -1013,7 +1024,9 @@ function AdminSection({
                   ),
                 )}
               </div>
-              <div className="admin-actions">
+                </div>
+              <div className="feedback-workflow">
+                <div><span>Workflow status</span><small>{item.status === "resolved" ? "User notified" : "Update sends on resolution"}</small></div>
                 <select
                   aria-label="Feedback status"
                   value={String(item.status)}
@@ -1034,6 +1047,7 @@ function AdminSection({
                     <option key={value}>{value}</option>
                   ))}
                 </select>
+                <label>Priority
                 <select
                   aria-label="Feedback priority"
                   value={String(item.priority ?? "medium")}
@@ -1054,12 +1068,15 @@ function AdminSection({
                     <option key={value}>{value}</option>
                   ))}
                 </select>
+                </label>
+              </div>
               </div>
             </article>
           ))
         ) : (
-          <div className="admin-empty">No matching feedback.</div>
+          <div className="admin-empty"><strong>No matching feedback</strong><br/>Resolved items stay out of the open queue and remain available from the Resolved filter.</div>
         )}
+        </div>
       </section>
     );
   if (section === "business")

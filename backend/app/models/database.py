@@ -250,6 +250,21 @@ class Feedback(Base):
     feature_area: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     severity: Mapped[str] = mapped_column(String(20), default="medium", index=True)
     affected_flow: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    type: Mapped[str] = mapped_column(String(50), index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    message: Mapped[str] = mapped_column(String(500))
+    resource_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    resource_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 

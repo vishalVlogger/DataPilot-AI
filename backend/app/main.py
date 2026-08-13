@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import admin, auth, beta, datasets, health, history, product, saas, workspaces
+from app.api.routes import admin, auth, beta, datasets, health, history, notifications, product, saas, workspaces
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.observability import initialize_sentry, request_id_context
@@ -43,6 +43,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(workspaces.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(beta.router, prefix="/api")
+app.include_router(notifications.router, prefix="/api")
 app.include_router(saas.router, prefix="/api")
 app.include_router(datasets.router, prefix="/api")
 app.include_router(history.router, prefix="/api")

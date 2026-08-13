@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/auth/AuthContext";
 import { DataChart } from "@/components/DataChart";
+import { NotificationBell } from "@/components/NotificationBell";
 import {
   applyCleaning,
   askDataset,
@@ -590,6 +591,7 @@ export default function Home() {
             </p>
           </div>
           <div className="account-tools">
+            <NotificationBell />
             <select
               aria-label="Current workspace"
               value={auth.workspace?.id ?? ""}

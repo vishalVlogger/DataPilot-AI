@@ -149,7 +149,7 @@ class LocalParquetDatasetStorage(DatasetStorageBackend):
         self._ensure_database_record(dataset_id)
         with session_scope() as session:
             item = DatasetRepository(session, self.workspace_id).get(dataset_id)
-            return {"id": item.id, "workspace_id": item.workspace_id, "name": item.name, "source_type": item.source_type, "sheet_name": item.sheet_name, "rows": item.row_count, "columns": item.column_count, "created_at": item.created_at, "updated_at": item.updated_at, "current_version": item.current_version, "storage_format": item.storage_format, "status": item.status, "profile_summary": item.profile_summary, "last_analyzed_at": item.last_analyzed_at, "storage_bytes": item.storage_bytes, "uploader_user_id": item.uploader_user_id}
+            return {"id": item.id, "workspace_id": item.workspace_id, "name": item.name, "source_type": item.source_type, "sheet_name": item.sheet_name, "rows": item.row_count, "columns": item.column_count, "created_at": item.created_at, "updated_at": item.updated_at, "current_version": item.current_version, "storage_format": item.storage_format, "status": item.status, "profile_summary": item.profile_summary, "last_analyzed_at": item.last_analyzed_at, "storage_bytes": item.storage_bytes, "uploader_user_id": item.uploader_user_id, "is_sample": item.is_sample}
 
     def update_profile(self, dataset_id: str, profile: dict[str, Any]) -> None:
         with session_scope() as session: DatasetRepository(session, self.workspace_id).update_profile(dataset_id, profile)

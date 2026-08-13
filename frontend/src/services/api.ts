@@ -4,7 +4,7 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000
 let accessToken: string | null = null;
 let workspaceId: string | null = null;
 
-export type User = { id:string; email:string; display_name:string; is_active:boolean; is_system_admin:boolean; email_verified_at:string|null; beta_acknowledged_at:string|null; created_at:string; last_login_at:string|null };
+export type User = { id:string; email:string; display_name:string; is_active:boolean; is_system_admin:boolean; email_verified_at:string|null; beta_acknowledged_at:string|null; created_at:string; last_login_at:string|null; acquisition_source:string; beta_status:string };
 export type Workspace = { id:string; name:string; slug:string; role:"owner"|"admin"|"member"; owner_user_id:string; plan_code:string; external_ai_enabled:boolean; created_at:string; updated_at:string; deletion_requested_at:string|null; deletion_scheduled_for:string|null };
 export type AuthPayload = { access_token:string; expires_in:number; user:User; workspaces:Workspace[]; email_delivery_status?:string|null; development_verification_url?:string|null };
 export type Usage = { plan_code:string; datasets:number; storage_bytes:number; analyses_this_month:number; ai_requests_this_month:number; reports_this_month:number; rows_this_month:number; limits:Record<string,number>; percentages:Record<string,number> };
@@ -33,7 +33,7 @@ async function parse<T>(response: Response): Promise<T> {
   return payload as T;
 }
 
-export async function register(email:string, password:string, displayName:string, invitationToken?:string):Promise<AuthPayload> { return parse(await apiFetch("/auth/register", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password,display_name:displayName,invitation_token:invitationToken,beta_acknowledged:true})})); }
+export async function register(email:string, password:string, displayName:string, invitationToken?:string):Promise<AuthPayload> { return parse(await apiFetch("/auth/register", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password,display_name:displayName,invitation_token:invitationToken,beta_acknowledged:true,acquisition_source:invitationToken?"workspace_invitation":"open_registration"})})); }
 export async function login(email:string, password:string):Promise<AuthPayload> { return parse(await apiFetch("/auth/login", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})})); }
 export async function refreshAuth():Promise<AuthPayload> { return parse(await apiFetch("/auth/refresh", {method:"POST"})); }
 export async function logout():Promise<void> { const response=await apiFetch("/auth/logout",{method:"POST"}); if(!response.ok) await parse(response); }
@@ -61,7 +61,7 @@ export async function updateMemberRole(workspaceId:string,userId:string,role:"ad
 export async function removeMember(workspaceId:string,userId:string):Promise<void>{const r=await apiFetch(`/workspaces/${workspaceId}/members/${userId}`,{method:"DELETE"});if(!r.ok)await parse(r);}
 export async function acceptInvitation(token:string):Promise<Invitation>{return parse(await apiFetch(`/invitations/${encodeURIComponent(token)}/accept`,{method:"POST"}));}
 export async function getProviderStatus():Promise<ProviderStatus>{return parse(await apiFetch("/ai/provider-status"));}
-export async function submitFeedback(values:{category:string;message:string;current_page?:string;dataset_id?:string;include_technical_context:boolean;request_id?:string;route?:string;error_code?:string;user_agent?:string}):Promise<{id:string}>{return parse(await apiFetch("/feedback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(values)}));}
+export async function submitFeedback(values:{category:string;message:string;current_page?:string;dataset_id?:string;include_technical_context:boolean;request_id?:string;route?:string;error_code?:string;user_agent?:string;feature_area?:string;severity?:string;affected_flow?:string}):Promise<{id:string}>{return parse(await apiFetch("/feedback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(values)}));}
 export async function getFeedbackConfig():Promise<{max_attachments:number;max_attachment_mb:number;accepted_extensions:string[]}>{return parse(await apiFetch("/feedback/config"));}
 export async function uploadFeedbackAttachments(feedbackId:string,files:File[]):Promise<FeedbackAttachment[]>{const body=new FormData();files.forEach(file=>body.append("files",file));return parse(await apiFetch(`/feedback/${feedbackId}/attachments`,{method:"POST",body}));}
 export async function getAdminSummary():Promise<Record<string,number>>{return parse(await apiFetch("/admin/summary"));}
@@ -73,6 +73,14 @@ export async function adminGet<T=Record<string,unknown>>(section:string,params:R
 export async function adminUserAction(userId:string,action:"activate"|"deactivate"|"grant_admin"|"revoke_admin"):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/users/${userId}/actions`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,confirmed:true})}));}
 export async function adminRetryJob(jobId:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/jobs/${jobId}/retry?confirmed=true`,{method:"POST"}));}
 export async function adminUpdateFeedback(feedbackId:string,status:string,priority:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/feedback/${feedbackId}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({status,priority})}));}
+export type OnboardingState={steps:Array<{key:string;label:string;complete:boolean}>;completed:number;total:number;dismissed:boolean;complete:boolean;welcome:string};
+export async function getOnboarding():Promise<OnboardingState>{return parse(await apiFetch("/onboarding"));}
+export async function dismissOnboarding():Promise<{dismissed:boolean}>{return parse(await apiFetch("/onboarding/dismiss",{method:"POST"}));}
+export async function loadSampleDataset():Promise<DatasetMetadata>{return parse(await apiFetch("/onboarding/sample-dataset",{method:"POST"}));}
+export async function getQuestionExamples(datasetId:string):Promise<{examples:string[]}>{return parse(await apiFetch(`/onboarding/question-examples?dataset_id=${encodeURIComponent(datasetId)}`));}
+export async function rateAnalysis(runId:string,helpful:boolean,comment?:string):Promise<{id:string;helpful:boolean}>{return parse(await apiFetch(`/analysis-runs/${runId}/feedback`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({helpful,comment})}));}
+export async function adminSetBetaStatus(userId:string,status:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/product/users/${userId}/status`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({status})}));}
+export async function adminAddBetaNote(userId:string,note:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/product/users/${userId}/notes`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({note})}));}
 
 export async function inspectWorkbook(file:File):Promise<string[]> { const body=new FormData();body.append("file",file);const result=await parse<{sheets:{name:string}[]}>(await apiFetch("/datasets/inspect",{method:"POST",body}));return result.sheets.map(s=>s.name); }
 export async function uploadDataset(file:File,sheetName?:string):Promise<DatasetMetadata> { const body=new FormData();body.append("file",file);if(sheetName)body.append("sheet_name",sheetName);return parse(await apiFetch("/datasets/upload",{method:"POST",body})); }

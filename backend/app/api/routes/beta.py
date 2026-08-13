@@ -14,6 +14,7 @@ from app.schemas.beta import AdminDiagnosticsResponse, AdminSummaryResponse, Fee
 from app.services.cleanup import CleanupService
 from app.services.email import email_delivery_diagnostics
 from app.services.feedback_attachments import FeedbackAttachmentStorage, validate_feedback_attachment
+from app.services.product_analytics import ProductEvents, record_product_event
 
 router = APIRouter(tags=["beta"])
 
@@ -21,6 +22,7 @@ router = APIRouter(tags=["beta"])
 @router.post("/invitations/{token}/accept", response_model=InvitationResponse)
 async def accept_invitation(token: str, user=Depends(authenticated_user)) -> InvitationResponse:
     with session_scope() as session: item = InvitationRepository(session).accept(hash_one_time_token(token), user)
+    record_product_event(ProductEvents.INVITATION_ACCEPTED, user.id, item["workspace_id"], "invitation", item["id"])
     return InvitationResponse.model_validate({**item, "status": "accepted"})
 
 
@@ -30,7 +32,8 @@ async def submit_feedback(payload: FeedbackRequest, request: Request, principal:
     if payload.include_technical_context:
         context = {"app_version": get_settings().app_version, "request_id": payload.request_id, "route": payload.route or str(request.url.path), "error_code": payload.error_code, "user_agent": (payload.user_agent or request.headers.get("user-agent", ""))[:500]}
     with session_scope() as session:
-        item = FeedbackRepository(session).create(user_id=principal.user_id, workspace_id=principal.workspace_id, category=payload.category, message=payload.message, current_page=payload.current_page, dataset_id=payload.dataset_id, technical_context=context)
+        item = FeedbackRepository(session).create(user_id=principal.user_id, workspace_id=principal.workspace_id, category=payload.category, message=payload.message, current_page=payload.current_page, dataset_id=payload.dataset_id, technical_context=context, feature_area=payload.feature_area, severity=payload.severity, affected_flow=payload.affected_flow)
+    record_product_event(ProductEvents.FEEDBACK_SUBMITTED, principal.user_id, principal.workspace_id, "feedback", item["id"], {"feature_area": payload.feature_area or "other", "severity": payload.severity})
     return FeedbackResponse.model_validate(item)
 
 

@@ -1,7 +1,7 @@
 export type DatasetMetadata = {
   id: string;
   name: string;
-  source_type: "csv" | "excel";
+  source_type: "csv" | "excel" | "sample";
   sheet_name: string | null;
   rows: number;
   columns: number;
@@ -11,6 +11,7 @@ export type DatasetMetadata = {
   storage_format?: string;
   status?: string;
   last_analyzed_at?: string | null;
+  is_sample?: boolean;
 };
 
 export type ColumnProfile = {

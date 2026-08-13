@@ -15,6 +15,7 @@ from app.services.cache import analysis_cache
 from app.services.datasets.storage import DatasetStorageBackend, get_dataset_storage
 from app.services.saas import UsageService
 from app.services.jobs import JobManager
+from app.services.product_analytics import ProductEvents, record_product_event
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 
@@ -33,7 +34,7 @@ def _public_job(item: dict) -> dict:
 async def list_datasets(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), search: str | None = Query(None, max_length=100), source_type: str | None = None, recently_analyzed: bool = False) -> list[dict]:
     principal = current_principal()
     with session_scope() as session: items = DatasetRepository(session, principal.workspace_id).list(limit, offset, search, source_type, recently_analyzed)
-    return [{"id": item["id"], "name": item["name"], "source_type": item["source_type"], "rows": item["row_count"], "columns": item["column_count"], "created_at": item["created_at"], "updated_at": item["updated_at"], "current_version": item["current_version"], "storage_format": item["storage_format"], "status": item["status"], "last_analyzed_at": item["last_analyzed_at"], "storage_bytes": item["storage_bytes"]} for item in items]
+    return [{"id": item["id"], "name": item["name"], "source_type": item["source_type"], "rows": item["row_count"], "columns": item["column_count"], "created_at": item["created_at"], "updated_at": item["updated_at"], "current_version": item["current_version"], "storage_format": item["storage_format"], "status": item["status"], "last_analyzed_at": item["last_analyzed_at"], "storage_bytes": item["storage_bytes"], "is_sample": item["is_sample"]} for item in items]
 
 
 @router.delete("/datasets/{dataset_id}", status_code=204)
@@ -76,6 +77,7 @@ async def save_analysis(dataset_id: str, request: SavedAnalysisRequest) -> Saved
     principal = current_principal(); storage().load_metadata(dataset_id)
     with session_scope() as session: item = SavedAnalysisRepository(session, principal.workspace_id).create(dataset_id, request.name, request.plan.model_dump(mode="json"), request.chart_config, principal.user_id)
     UsageService(principal.workspace_id).activity("analysis_saved", principal.user_id, dataset_id, {"saved_analysis_id": item["id"], "name": request.name})
+    record_product_event(ProductEvents.ANALYSIS_SAVED, principal.user_id, principal.workspace_id, "saved_analysis", item["id"])
     return SavedAnalysisResponse.model_validate(item)
 
 
@@ -137,6 +139,7 @@ async def get_job_result(job_id: str) -> Response:
     from app.services.object_storage import get_object_storage
     key = job["result_reference"]; content = get_object_storage().get(key)
     suffix = Path(key).suffix.lower(); media_type = "application/pdf" if suffix == ".pdf" else "application/zip" if suffix == ".zip" else "text/html"
+    record_product_event(ProductEvents.REPORT_DOWNLOADED, principal.user_id, principal.workspace_id, "job", job_id, {"report_format": suffix.lstrip(".") or "unknown"})
     return Response(content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{Path(key).name}"'})
 
 

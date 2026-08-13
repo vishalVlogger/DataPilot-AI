@@ -96,9 +96,9 @@ class UsageRepository:
         if since is not None: query = query.where(UsageEvent.created_at >= since)
         return int(self.session.scalar(query) or 0)
     def dataset_count(self) -> int:
-        return int(self.session.scalar(select(func.count()).select_from(Dataset).where(Dataset.workspace_id == self.workspace_id)) or 0)
+        return int(self.session.scalar(select(func.count()).select_from(Dataset).where(Dataset.workspace_id == self.workspace_id, Dataset.is_sample.is_(False))) or 0)
     def storage_bytes(self) -> int:
-        return int(self.session.scalar(select(func.coalesce(func.sum(Dataset.storage_bytes), 0)).where(Dataset.workspace_id == self.workspace_id)) or 0)
+        return int(self.session.scalar(select(func.coalesce(func.sum(Dataset.storage_bytes), 0)).where(Dataset.workspace_id == self.workspace_id, Dataset.is_sample.is_(False))) or 0)
 
 
 class ActivityRepository:

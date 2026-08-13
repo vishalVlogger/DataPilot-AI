@@ -80,6 +80,8 @@ If a port is occupied, stop the local process using `3000`, `8000`, `9000`, or `
 
 Register the first account in the UI. Its default workspace uses the Free plan; plan limits are enforced centrally by the backend. For a containerized PostgreSQL deployment, see [deployment readiness](docs/deployment.md).
 
+Milestone 8 adds a privacy-safe activation funnel, guided onboarding with quota-free sample data, structured result/feature feedback, and a metadata-only Product Analytics view at `/admin/product`. See the [beta launch checklist](docs/beta-launch-checklist.md), [beta user guide](docs/beta-user-guide.md), and [product analytics admin guide](docs/product-analytics-admin.md).
+
 ## Test and build
 
 System administrators use the dedicated `/admin` Platform Console for metadata-only platform operations. Workspace administrators manage one workspace and cannot access this console. See [System Admin Console](docs/admin.md) for routes, privacy boundaries, and audited CLI promotion.

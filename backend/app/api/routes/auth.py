@@ -15,6 +15,7 @@ from app.models import User, Workspace
 from app.repositories import AccountTokenRepository, InvitationRepository, RefreshSessionRepository, UserRepository, WorkspaceRepository
 from app.schemas.saas import AuthResponse, BetaAcknowledgementRequest, CurrentUserResponse, EmailRequest, LoginRequest, RegisterRequest, ResetPasswordRequest, TokenRequest, UserResponse, UserUpdateRequest, WorkspaceResponse
 from app.services.email import send_transactional_email
+from app.services.product_analytics import ProductEvents, record_product_event
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -61,10 +62,13 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
             if not payload.invitation_token: raise AppError("A valid invitation is required.", "INVITATION_REQUIRED", 403)
             InvitationRepository(session).validate_for_registration(hash_one_time_token(payload.invitation_token), normalized)
         user = users.create(str(payload.email), normalized, hash_password(payload.password), payload.display_name.strip())
+        user.acquisition_source = "workspace_invitation" if payload.invitation_token else payload.acquisition_source
+        session.commit()
         if payload.beta_acknowledged: users.acknowledge_beta(user)
         WorkspaceRepository(session).create(user.id, f"{user.display_name}'s Workspace", get_settings().default_plan)
     delivery_status, development_link = await _send_account_token(user, "verify_email")
     issued = _issue(user, response, request); issued.email_delivery_status = delivery_status; issued.development_verification_url = development_link
+    record_product_event(ProductEvents.REGISTERED, user.id, properties={"acquisition_source": user.acquisition_source})
     return issued
 
 
@@ -75,7 +79,9 @@ async def login(payload: LoginRequest, request: Request, response: Response) -> 
         users = UserRepository(session); user = users.by_email(normalize_email(str(payload.email)))
         if user is None or not user.is_active or not verify_password(user.password_hash, payload.password): raise AppError("Invalid email or password.", "AUTH_INVALID_CREDENTIALS", 401)
         users.touch_login(user)
-    return _issue(user, response, request)
+    issued = _issue(user, response, request)
+    record_product_event(ProductEvents.LOGGED_IN, user.id)
+    return issued
 
 
 @router.post("/refresh", response_model=AuthResponse)
@@ -115,7 +121,8 @@ async def update_me(payload: UserUpdateRequest, user=Depends(authenticated_user)
 async def verify_email(payload: TokenRequest) -> dict[str, str]:
     with session_scope() as session:
         token = AccountTokenRepository(session).consume(hash_one_time_token(payload.token), "verify_email")
-        UserRepository(session).verify_email(UserRepository(session).get(token.user_id))
+        verified = UserRepository(session).verify_email(UserRepository(session).get(token.user_id))
+    record_product_event(ProductEvents.EMAIL_VERIFIED, verified.id)
     return {"message": "Email verified successfully."}
 
 

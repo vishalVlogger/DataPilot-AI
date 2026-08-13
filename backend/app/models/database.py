@@ -28,6 +28,9 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deletion_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acquisition_source: Mapped[str] = mapped_column(String(80), default="open_registration")
+    beta_status: Mapped[str] = mapped_column(String(30), default="onboarding", index=True)
+    onboarding_dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Workspace(Base):
@@ -109,6 +112,7 @@ class Dataset(Base):
     profile_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="ready")
     storage_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    is_sample: Mapped[bool] = mapped_column(Boolean, default=False)
     versions: Mapped[list["DatasetVersion"]] = relationship(cascade="all, delete-orphan", back_populates="dataset")
     sessions: Mapped[list["AnalysisSession"]] = relationship(cascade="all, delete-orphan", back_populates="dataset")
     saved_analyses: Mapped[list["SavedAnalysis"]] = relationship(cascade="all, delete-orphan", back_populates="dataset")
@@ -243,6 +247,44 @@ class Feedback(Base):
     technical_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="new")
     priority: Mapped[str] = mapped_column(String(20), default="medium")
+    feature_area: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    severity: Mapped[str] = mapped_column(String(20), default="medium", index=True)
+    affected_flow: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class ProductEvent(Base):
+    __tablename__ = "product_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
+    event_name: Mapped[str] = mapped_column(String(80), index=True)
+    feature_area: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    resource_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    resource_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    properties: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class AnalysisFeedback(Base):
+    __tablename__ = "analysis_feedback"
+    __table_args__ = (UniqueConstraint("analysis_run_id", "user_id", name="uq_analysis_feedback_run_user"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    analysis_run_id: Mapped[str] = mapped_column(ForeignKey("analysis_runs.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    helpful: Mapped[bool] = mapped_column(Boolean)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class BetaUserNote(Base):
+    __tablename__ = "beta_user_notes"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    author_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    note: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 

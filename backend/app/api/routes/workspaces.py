@@ -16,6 +16,7 @@ from app.services.email import send_transactional_email
 from app.services.features import feature_flags
 from app.services.jobs.manager import JobManager
 from app.services.workspace_lifecycle import cancel_workspace_deletion, ensure_workspace_writable, schedule_workspace_deletion
+from app.services.product_analytics import ProductEvents, record_product_event
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
@@ -79,6 +80,7 @@ async def invite_member(workspace_id: str, payload: InvitationCreateRequest, req
         item = InvitationRepository(session, workspace_id).create(str(payload.email), normalized_email, payload.role, token_hash, user.id, datetime.now(timezone.utc) + timedelta(days=settings.invitation_expire_days))
         response = InvitationResponse.model_validate(item, from_attributes=True)
     delivery_status, development_link = await _deliver_invitation(str(payload.email), token)
+    record_product_event(ProductEvents.INVITATION_SENT, user.id, workspace_id, "invitation", item.id)
     return response.model_copy(update={"delivery_status": delivery_status, "development_invitation_url": development_link})
 
 

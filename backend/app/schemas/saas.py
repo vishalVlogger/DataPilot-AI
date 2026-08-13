@@ -10,6 +10,7 @@ class RegisterRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=120)
     invitation_token: str | None = Field(default=None, min_length=20, max_length=500)
     beta_acknowledged: bool = False
+    acquisition_source: Literal["open_registration", "workspace_invitation", "beta_invite", "partner", "referral", "other"] = "open_registration"
 
     @field_validator("password")
     @classmethod
@@ -26,6 +27,7 @@ class LoginRequest(BaseModel):
 
 class UserResponse(BaseModel):
     id: str; email: EmailStr; display_name: str; is_active: bool; is_system_admin: bool = False; email_verified_at: datetime | None = None; beta_acknowledged_at: datetime | None = None; created_at: datetime; last_login_at: datetime | None
+    acquisition_source: str = "open_registration"; beta_status: str = "onboarding"
 
 
 class WorkspaceResponse(BaseModel):

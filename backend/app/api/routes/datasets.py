@@ -39,6 +39,7 @@ from app.core.auth import current_principal, require_auth
 from app.core.rate_limit import rate_limiter
 from app.services.saas import UsageService
 from app.services.features import feature_flags
+from app.services.product_analytics import ProductEvents, record_product_event
 
 router = APIRouter(prefix="/datasets", dependencies=[Depends(require_auth)])
 logger = logging.getLogger("datapilot.analytics")
@@ -69,7 +70,7 @@ def _validate_profile_plan(profile: dict, plan) -> None:
     validate_semantic_plan(profile["columns"], plan)
 
 
-def _record_run(dataset_id: str, requested_session_id: str | None, version: int, question: str | None, plan, result, engine: str, duration_ms: float, explanation: str | None = None) -> tuple[str, str]:
+def _record_run(dataset_id: str, requested_session_id: str | None, version: int, question: str | None, plan, result, engine: str, duration_ms: float, explanation: str | None = None, fallback: bool = False, cached: bool = False) -> tuple[str, str]:
     principal = current_principal()
     summary = result[:50] if isinstance(result, list) else result
     with session_scope() as session:
@@ -91,6 +92,7 @@ def _record_run(dataset_id: str, requested_session_id: str | None, version: int,
         )
         DatasetRepository(session, principal.workspace_id).mark_analyzed(dataset_id)
     usage = UsageService(principal.workspace_id); usage.record("analysis", 1, principal.user_id, dataset_id); usage.activity("analysis_executed", principal.user_id, dataset_id, {"operation": plan.operation})
+    record_product_event(ProductEvents.ANALYSIS_SUCCEEDED, principal.user_id, principal.workspace_id, "analysis_run", run["id"], {"operation": plan.operation, "engine": engine, "fallback": fallback, "cached": cached})
     return session_record["id"], run["id"]
 
 
@@ -116,6 +118,8 @@ async def upload_dataset(file: UploadFile = File(...), sheet_name: str | None = 
     metadata = store.save(frame, file.filename or "upload", source_type, selected_sheet, content)
     store.update_profile(metadata["id"], profile_dataset(frame, metadata["id"]))
     usage.record("dataset_upload", 1, principal.user_id, metadata["id"], {"source_type": source_type}); usage.record("rows_uploaded", len(frame), principal.user_id, metadata["id"]); usage.record("storage_consumed", metadata["storage_bytes"], principal.user_id, metadata["id"]); usage.activity("dataset_uploaded", principal.user_id, metadata["id"], {"name": metadata["name"], "rows": len(frame)})
+    rows_bucket = "under_1k" if len(frame) < 1000 else "under_100k" if len(frame) < 100000 else "100k_plus"
+    record_product_event(ProductEvents.DATASET_UPLOADED, principal.user_id, principal.workspace_id, "dataset", metadata["id"], {"source_type": source_type, "rows_bucket": rows_bucket, "is_sample": False})
     return DatasetMetadata.model_validate(metadata)
 
 
@@ -180,7 +184,7 @@ async def ask_dataset(dataset_id: str, request: AskRequest) -> AskResponse:
         answer = await mock.explain_result(request.question, plan, result)
     suggestion = ChartSuggestion(type=recommend_chart_type(profile["columns"], plan)) if isinstance(result, list) and result else None
     explanation = {"metric": plan.metric, "aggregation": plan.aggregation, "grouped_by": plan.group_by, "filters": [item.model_dump() for item in plan.filters], "date_filter": plan.date_filter.model_dump() if plan.date_filter else None}
-    session_id, run_id = _record_run(dataset_id, request.session_id, version, request.question, plan, result, engine_result.engine, engine_result.duration_ms, answer)
+    session_id, run_id = _record_run(dataset_id, request.session_id, version, request.question, plan, result, engine_result.engine, engine_result.duration_ms, answer, fallback_used, cached is not None)
     metadata = {"execution_engine": engine_result.engine, "dataset_version": version, "load_ms": load_ms, "execution_ms": engine_result.duration_ms, "ai_interpretation_ms": interpretation_ms, "provider_fallback": fallback_used, "cached": cached is not None, "session_id": session_id, "run_id": run_id, "interpreted_as": describe_chart_plan(plan, request.question)["interpreted_as"]}
     logger.info("analysis_complete", extra={"dataset_id": dataset_id, **metadata})
     usage.record("ai_request", 1, principal.user_id, dataset_id)
@@ -202,6 +206,7 @@ async def analyze_dataset(dataset_id: str, request: AnalyzeRequest) -> AnalysisR
 async def get_insights(dataset_id: str) -> list[Insight]:
     settings = get_settings()
     results = generate_insights(storage().load_frame(dataset_id), dataset_id, settings.max_category_analysis)
+    principal = current_principal(); record_product_event(ProductEvents.INSIGHTS_VIEWED, principal.user_id, principal.workspace_id, "dataset", dataset_id)
     return [Insight.model_validate(item) for item in results]
 
 
@@ -222,6 +227,7 @@ async def create_chart(dataset_id: str, request: ChartRequest) -> ChartResponse:
     if request.drill_down:
         plan = plan.model_copy(update={"filters": [*plan.filters, request.drill_down]})
     result = generate_chart(frame, plan, request.chart_type, settings.max_chart_rows, request.title, request.x_axis_label, request.y_axis_label, request.show_legend, request.question)
+    principal = current_principal(); record_product_event(ProductEvents.CHART_CREATED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"chart_type": result.get("type", "unknown")})
     return ChartResponse.model_validate(result)
 
 
@@ -234,6 +240,7 @@ async def get_quality(dataset_id: str) -> list[QualityIssue]:
 @router.post("/{dataset_id}/clean/preview", response_model=CleaningPreview)
 async def preview_cleaning(dataset_id: str, request: CleaningRequest) -> CleaningPreview:
     _, preview = clean_frame(storage().load_frame(dataset_id), request.operations)
+    principal = current_principal(); record_product_event(ProductEvents.CLEANING_PREVIEWED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"operation": request.operations[0].type if request.operations else "unknown"})
     return preview
 
 
@@ -250,6 +257,7 @@ async def apply_cleaning(dataset_id: str, request: CleaningRequest) -> CleaningA
     analysis_cache.invalidate_dataset(dataset_id)
     profile = profile_dataset(cleaned, dataset_id); store.update_profile(dataset_id, profile)
     usage.activity("dataset_cleaned", principal.user_id, dataset_id, {"version": version, "affected_rows": preview.affected_rows})
+    record_product_event(ProductEvents.CLEANING_APPLIED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"version": version, "operation": request.operations[0].type if request.operations else "unknown"})
     return CleaningApplyResponse(preview=preview, audit_entries=audit, profile=DatasetProfile.model_validate(profile), version=version)
 
 
@@ -258,6 +266,7 @@ async def reset_dataset(dataset_id: str) -> DatasetProfile:
     principal = current_principal(); store = storage(); source = store.load_version(dataset_id, 0); usage = UsageService(principal.workspace_id); usage.enforce_storage_growth(int(source.memory_usage(deep=True).sum())); frame = store.reset(dataset_id); profile = profile_dataset(frame, dataset_id); store.update_profile(dataset_id, profile)
     analysis_cache.invalidate_dataset(dataset_id)
     usage.activity("dataset_restored", principal.user_id, dataset_id, {"source_version": 0, "operation": "reset"})
+    record_product_event(ProductEvents.DATASET_RESTORED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"version": 0})
     return DatasetProfile.model_validate(profile)
 
 
@@ -273,6 +282,7 @@ async def restore_version(dataset_id: str, version: int) -> CleaningApplyRespons
     preview = CleaningPreview(changes=[], affected_rows=0, affected_cells=0, resulting_rows=len(frame), warnings=[f"Restored version {version} as new version {new_version}."])
     profile = profile_dataset(frame, dataset_id); store.update_profile(dataset_id, profile)
     usage.activity("dataset_restored", principal.user_id, dataset_id, {"source_version": version, "version": new_version})
+    record_product_event(ProductEvents.DATASET_RESTORED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"version": version})
     return CleaningApplyResponse(preview=preview, audit_entries=store.load_audit(dataset_id), profile=DatasetProfile.model_validate(profile), version=new_version)
 
 
@@ -281,6 +291,7 @@ async def create_report(dataset_id: str, request: ReportRequest) -> Response:
     settings = get_settings(); principal = current_principal(); usage = UsageService(principal.workspace_id); usage.enforce_report(); rate_limiter.check(f"report:{principal.user_id}", 10, 60); store = storage(); store.load_metadata(dataset_id)
     if request.format == "pdf" and not feature_flags.enabled("pdf_reports"): raise AppError("PDF reports are disabled.", "REPORT_FORMAT_DISABLED", 400)
     usage.record("report", 1, principal.user_id, dataset_id); usage.activity("report_generated", principal.user_id, dataset_id, {"format": request.format, "async": request.async_job})
+    record_product_event(ProductEvents.REPORT_REQUESTED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"report_format": request.format})
     if request.async_job and settings.background_jobs_enabled:
         job = JobManager().create_report_job(dataset_id, request, store)
         return JSONResponse(content={"job_id": job["id"], "status": job["status"]}, status_code=202)
@@ -305,6 +316,7 @@ async def export_dataset(
     version: str = Query(default="current", pattern="^(current|original)$"),
 ) -> StreamingResponse:
     store = storage(); principal = current_principal(); UsageService(principal.workspace_id).record("export", 1, principal.user_id, dataset_id, {"format": format, "version": version})
+    record_product_event(ProductEvents.EXPORT_DOWNLOADED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"export_format": format, "version": version})
     frame = store.load_original_frame(dataset_id) if version == "original" else store.load_frame(dataset_id)
     metadata = store.load_metadata(dataset_id)
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(metadata["name"]).stem).strip("_") or "dataset"

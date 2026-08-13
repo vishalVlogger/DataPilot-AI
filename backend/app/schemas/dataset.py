@@ -16,7 +16,7 @@ class InspectResponse(BaseModel):
 class DatasetMetadata(BaseModel):
     id: str
     name: str
-    source_type: Literal["csv", "excel"]
+    source_type: Literal["csv", "excel", "sample"]
     sheet_name: str | None = None
     rows: int
     columns: int
@@ -29,6 +29,7 @@ class DatasetMetadata(BaseModel):
     workspace_id: str | None = None
     uploader_user_id: str | None = None
     storage_bytes: int = 0
+    is_sample: bool = False
 
 
 class DatasetRenameRequest(BaseModel):

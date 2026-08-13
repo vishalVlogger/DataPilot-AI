@@ -34,6 +34,9 @@ class FeedbackRequest(BaseModel):
     route: str | None = Field(default=None, max_length=255)
     error_code: str | None = Field(default=None, max_length=80)
     user_agent: str | None = Field(default=None, max_length=500)
+    feature_area: Literal["onboarding", "datasets", "analysis", "insights", "charts", "cleaning", "reports", "exports", "collaboration", "account", "other"] | None = None
+    severity: Literal["low", "medium", "high", "critical"] = "medium"
+    affected_flow: str | None = Field(default=None, max_length=80)
 
 
 class FeedbackAttachmentResponse(BaseModel):
@@ -42,6 +45,7 @@ class FeedbackAttachmentResponse(BaseModel):
 
 class FeedbackResponse(BaseModel):
     id: str; category: str; message: str; current_page: str | None; dataset_id: str | None; status: str; priority: str = "medium"; created_at: datetime
+    feature_area: str | None = None; severity: str = "medium"; affected_flow: str | None = None
     attachments: list[FeedbackAttachmentResponse] = Field(default_factory=list)
 
 

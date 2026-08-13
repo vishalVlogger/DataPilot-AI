@@ -65,8 +65,14 @@ def test_feedback_filters_workflow_support_and_business_are_safe(anonymous_clien
     created = anonymous_client.post("/api/feedback", headers=headers, json={"category": "bug", "message": "Admin workflow test"}).json()
     filtered = anonymous_client.get("/api/admin/feedback?category=bug&status=new&limit=5", headers=headers).json()
     assert filtered["total"] == 1 and filtered["items"][0]["priority"] == "medium"
-    updated = anonymous_client.patch(f"/api/admin/feedback/{created['id']}", headers=headers, json={"status": "reviewing", "priority": "high"})
-    assert updated.status_code == 200 and updated.json()["priority"] == "high"
+    updated = anonymous_client.patch(f"/api/admin/feedback/{created['id']}", headers=headers, json={"status": "resolved", "priority": "high"})
+    assert updated.status_code == 200 and updated.json()["status"] == "resolved" and updated.json()["priority"] == "high"
+    reflected = anonymous_client.get("/api/admin/feedback?status=resolved&limit=5", headers=headers).json()
+    assert reflected["total"] == 1 and reflected["items"][0]["id"] == created["id"] and reflected["items"][0]["status"] == "resolved"
+    from app.core.database import session_scope
+    with session_scope() as session:
+        persisted = session.get(Feedback, created["id"])
+        assert persisted.status == "resolved" and persisted.priority == "high"
     support = anonymous_client.get("/api/admin/support?q=support-admin", headers=headers)
     assert support.status_code == 200 and support.json()["results"]
     audit = anonymous_client.get("/api/admin/audit", headers=headers).json()["items"]

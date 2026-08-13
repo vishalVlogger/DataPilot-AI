@@ -1017,17 +1017,18 @@ function AdminSection({
                 <select
                   aria-label="Feedback status"
                   value={String(item.status)}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const nextStatus = event.currentTarget.value;
                     requestAction(
-                      `Change feedback status to ${event.target.value}?`,
+                      `Change feedback status to ${nextStatus}?`,
                       () =>
                         adminUpdateFeedback(
                           String(item.id),
-                          event.target.value,
+                          nextStatus,
                           String(item.priority ?? "medium"),
                         ),
-                    )
-                  }
+                    );
+                  }}
                 >
                   {["new", "reviewing", "planned", "resolved"].map((value) => (
                     <option key={value}>{value}</option>
@@ -1036,17 +1037,18 @@ function AdminSection({
                 <select
                   aria-label="Feedback priority"
                   value={String(item.priority ?? "medium")}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const nextPriority = event.currentTarget.value;
                     requestAction(
-                      `Change feedback priority to ${event.target.value}?`,
+                      `Change feedback priority to ${nextPriority}?`,
                       () =>
                         adminUpdateFeedback(
                           String(item.id),
                           String(item.status),
-                          event.target.value,
+                          nextPriority,
                         ),
-                    )
-                  }
+                    );
+                  }}
                 >
                   {["low", "medium", "high"].map((value) => (
                     <option key={value}>{value}</option>

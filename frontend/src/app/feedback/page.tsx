@@ -159,20 +159,12 @@ export default function FeedbackPage() {
           {error}
         </div>
       )}
-      <section className="feedback-history panel" aria-labelledby="feedback-history-title">
-        <div className="feedback-history-heading">
-          <div><p className="eyebrow">YOUR REQUESTS</p><h2 id="feedback-history-title">Feedback status</h2></div>
-          <small>We’ll notify you here and by email when an item is resolved.</small>
+      <div className="feedback-page-layout">
+      <form className="panel settings-form feedback-submit-form" onSubmit={submit} aria-labelledby="feedback-form-title">
+        <div className="feedback-form-heading">
+          <div><p className="eyebrow">NEW FEEDBACK</p><h2 id="feedback-form-title">Tell us what happened</h2></div>
+          <small>Fields marked optional can be left blank.</small>
         </div>
-        {submitted.length ? <div className="feedback-history-list">{submitted.map((item) => (
-          <article key={item.id} className={item.status === "resolved" ? "resolved" : ""}>
-            <div><span className={`status-badge ${item.status}`}>{item.status}</span><time>{new Date(item.created_at).toLocaleDateString()}</time></div>
-            <p>{item.message}</p>
-            {item.resolved_at && <small>Resolved {new Date(item.resolved_at).toLocaleString()}</small>}
-          </article>
-        ))}</div> : <div className="empty-state">You haven’t submitted feedback in this workspace yet.</div>}
-      </section>
-      <form className="panel settings-form" onSubmit={submit}>
         <label>
           Category
           <select
@@ -314,6 +306,20 @@ export default function FeedbackPage() {
           {busy ? "Submitting…" : "Submit feedback"}
         </button>
       </form>
+      <section className="feedback-history panel" aria-labelledby="feedback-history-title">
+        <div className="feedback-history-heading">
+          <div><p className="eyebrow">YOUR REQUESTS</p><h2 id="feedback-history-title">Feedback status</h2></div>
+          <small>We’ll notify you here and by email when an item is resolved.</small>
+        </div>
+        {submitted.length ? <div className="feedback-history-list">{submitted.map((item) => (
+          <article key={item.id} className={item.status === "resolved" ? "resolved" : ""}>
+            <div><span className={`status-badge ${item.status}`}>{item.status}</span><time>{new Date(item.created_at).toLocaleDateString()}</time></div>
+            <p>{item.message}</p>
+            {item.resolved_at && <small>Resolved {new Date(item.resolved_at).toLocaleString()}</small>}
+          </article>
+        ))}</div> : <div className="empty-state">You haven’t submitted feedback in this workspace yet.</div>}
+      </section>
+      </div>
     </div>
   );
 }

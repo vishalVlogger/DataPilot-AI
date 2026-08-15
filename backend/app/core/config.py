@@ -2,11 +2,12 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
     app_name: str = "DataPilot AI"
-    app_version: str = "0.8.0-beta"
+    app_version: str = "0.9.0-beta"
     environment: str = "development"
     app_env: str = "development"
     ai_provider: str = "mock"
@@ -36,6 +37,16 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 14
     refresh_cookie_name: str = "datapilot_refresh"
     default_plan: str = "free"
+    billing_provider: str = "none"
+    pricing_currency: str = "INR"
+    free_price_monthly: float | None = 0
+    pro_price_monthly: float | None = None
+    business_price_monthly: float | None = None
+    pro_trial_enabled: bool = True
+    pro_trial_days: int = 14
+    plan_limit_warning_percent: int = 75
+    plan_limit_critical_percent: int = 90
+    plan_catalog_json: str | None = None
     frontend_url: str = "http://localhost:3000"
     rate_limit_enabled: bool = True
     rate_limit_backend: str = "memory"
@@ -94,6 +105,11 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    @field_validator("free_price_monthly", "pro_price_monthly", "business_price_monthly", mode="before")
+    @classmethod
+    def empty_price_is_unconfigured(cls, value):
+        return None if value == "" else value
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -121,6 +137,9 @@ class Settings(BaseSettings):
         if self.environment_name not in {"development", "test", "staging", "production"}: errors.append("APP_ENV must be development, test, staging, or production.")
         if self.job_execution_mode.casefold() not in {"local", "redis"}: errors.append("JOB_EXECUTION_MODE must be local or redis.")
         if self.dataset_storage_backend.casefold() not in {"local", "s3"}: errors.append("DATASET_STORAGE_BACKEND must be local or s3.")
+        if self.billing_provider.casefold() not in {"none", "manual"}: errors.append("BILLING_PROVIDER must be none or manual.")
+        if not 1 <= self.pro_trial_days <= 90: errors.append("PRO_TRIAL_DAYS must be between 1 and 90.")
+        if not 1 <= self.plan_limit_warning_percent < self.plan_limit_critical_percent <= 100: errors.append("Plan warning thresholds must be increasing percentages between 1 and 100.")
         if self.job_execution_mode.casefold() == "redis" and not self.redis_url: errors.append("REDIS_URL is required for Redis job execution.")
         if self.dataset_storage_backend.casefold() == "s3":
             if not self.s3_bucket: errors.append("S3_BUCKET is required for S3 storage.")

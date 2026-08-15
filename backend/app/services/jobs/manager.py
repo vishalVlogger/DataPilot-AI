@@ -54,7 +54,7 @@ class JobManager:
             current = self.get(job_id, workspace_id); attempt = current.get("attempt_count", 0) + 1
             self._update(job_id, workspace_id, status="running", stage="starting", progress=5, started_at=datetime.now(timezone.utc), attempt_count=attempt, next_attempt_at=None, last_error=None)
             if job_type == "report": self._run_report(job_id, workspace_id, user_id, dataset_id, payload)
-            elif job_type == "workspace_export": self._run_workspace_export(job_id, workspace_id, payload)
+            elif job_type == "workspace_export": self._run_workspace_export(job_id, workspace_id, user_id, payload)
             else: raise ValueError("Unsupported durable job type")
             logger.info("job_completed", extra={"job_id": job_id, "dataset_id": dataset_id, "workspace_id": workspace_id})
         except Exception as exc:
@@ -78,13 +78,17 @@ class JobManager:
         else: html, _ = generate_html_report(frame, dataset_id, options, versions); content = html.encode(); content_type = "text/html"; suffix = "html"
         key = f"workspaces/{workspace_id}/reports/{job_id}.{suffix}"; get_object_storage().put(key, content, content_type)
         self._update(job_id, workspace_id, status="completed", stage="complete", progress=100, completed_at=datetime.now(timezone.utc), result_reference=key)
+        from app.services.saas import UsageService
+        usage = UsageService(workspace_id); usage.record("report", 1, user_id, job_id, {"format": options.format, "async": True}, f"report:{job_id}"); usage.activity("report_generated", user_id, dataset_id, {"format": options.format, "async": True})
 
-    def _run_workspace_export(self, job_id: str, workspace_id: str, payload: dict) -> None:
+    def _run_workspace_export(self, job_id: str, workspace_id: str, user_id: str | None, payload: dict) -> None:
         from app.services.workspace_lifecycle import build_workspace_export
         self._update(job_id, workspace_id, stage="collecting metadata", progress=30)
         content = build_workspace_export(workspace_id, bool(payload.get("include_raw")))
         key = f"workspaces/{workspace_id}/exports/{job_id}.zip"; get_object_storage().put(key, content, "application/zip")
         self._update(job_id, workspace_id, status="completed", stage="complete", progress=100, completed_at=datetime.now(timezone.utc), result_reference=key)
+        from app.services.saas import UsageService
+        UsageService(workspace_id).record("export", 1, user_id, job_id, {"type": "workspace", "include_raw": bool(payload.get("include_raw"))}, f"workspace-export:{job_id}")
 
     def _update(self, job_id: str, workspace_id: str, **values) -> None:
         with session_scope() as session: JobRepository(session, workspace_id).update(job_id, **values)

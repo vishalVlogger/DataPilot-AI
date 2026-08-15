@@ -2,7 +2,8 @@
 
 ## Before inviting users
 
-- Deploy `0.8.0-beta` and run `alembic upgrade head`; confirm migration `0007` is current.
+- Deploy `0.9.0-beta` and run `alembic upgrade head`; confirm migration `0009` is current.
+- Verify `/pricing`, one-time Pro trial activation, plan-limit upgrade guidance, and the System Admin Commercial dashboard.
 - Confirm HTTPS, secure cookies, PostgreSQL, Redis worker health, private object storage, SMTP delivery, error monitoring, backups, and restore procedures.
 - Confirm product events contain only allowlisted metadata—never questions, filenames, dataset values, or result rows.
 - Create a dedicated system-admin account and verify `/admin/product` for 7 days, 30 days, and all time.

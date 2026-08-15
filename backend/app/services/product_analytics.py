@@ -37,6 +37,10 @@ class ProductEvents:
     FEEDBACK_SUBMITTED = "feedback_submitted"
     RESULT_RATED = "analysis_result_rated"
     ONBOARDING_DISMISSED = "onboarding_dismissed"
+    TRIAL_STARTED = "trial_started"
+    TRIAL_EXPIRED = "trial_expired"
+    UPGRADE_REQUESTED = "upgrade_requested"
+    SUBSCRIPTION_ACTIVATED = "subscription_activated"
 
 
 EVENT_FEATURE = {
@@ -49,13 +53,15 @@ EVENT_FEATURE = {
     ProductEvents.ANALYSIS_SAVED: "saved_analysis", ProductEvents.INVITATION_SENT: "collaboration",
     ProductEvents.INVITATION_ACCEPTED: "collaboration", ProductEvents.FEEDBACK_SUBMITTED: "feedback",
     ProductEvents.RESULT_RATED: "feedback",
+    ProductEvents.TRIAL_STARTED: "commercial", ProductEvents.TRIAL_EXPIRED: "commercial",
+    ProductEvents.UPGRADE_REQUESTED: "commercial", ProductEvents.SUBSCRIPTION_ACTIVATED: "commercial",
 }
 
 # Explicitly excludes questions, filenames, dataset values, result rows, and arbitrary browser context.
 SAFE_PROPERTIES = {
     "source_type", "rows_bucket", "operation", "engine", "fallback", "cached", "chart_type",
     "report_format", "export_format", "version", "failure_category", "helpful", "severity",
-    "feature_area", "acquisition_source", "is_sample",
+    "feature_area", "acquisition_source", "is_sample", "plan_code", "assignment_type",
 }
 
 
@@ -175,19 +181,33 @@ class ProductAnalyticsService:
         d1 = sum(bool(item["returned"] and (item["returned"] - item["registered"].date()).days <= 1) for item in d1_eligible)
         d7 = sum(bool(item["returned"] and (item["returned"] - item["registered"].date()).days <= 7) for item in d7_eligible)
         user_rows = []
+        from app.services.commercial import EntitlementService
+        memberships = self.session.execute(select(WorkspaceMember.user_id, WorkspaceMember.workspace_id).order_by(WorkspaceMember.joined_at)).all()
+        user_workspace: dict[str, str] = {}
+        for user_id, workspace_id in memberships: user_workspace.setdefault(user_id, workspace_id)
+        workspace_ids = {workspace_id for _, workspace_id in memberships} | {event.workspace_id for event in events if event.workspace_id}
+        workspace_plan = {workspace_id: EntitlementService(workspace_id).plan()[0] for workspace_id in workspace_ids}
+        plan_samples: dict[str, dict[str, Any]] = defaultdict(lambda: {"users": set(), "activated": 0, "successful_analyses": 0, "features": defaultdict(set)})
         for item in profiles:
             if not item["verified"]: follow_up = "Verify email"
             elif not item["first_upload"]: follow_up = "Offer sample dataset"
             elif not item["first_analysis"]: follow_up = "Suggest a starter question"
             elif not item["returned"]: follow_up = "Check in after first value"
             else: follow_up = "No follow-up needed"
-            user_rows.append({**{key: (_iso(value) if isinstance(value, datetime) else value.isoformat() if hasattr(value, "isoformat") else value) for key, value in item.items()}, "recommended_follow_up": follow_up})
+            plan_code = workspace_plan.get(user_workspace.get(item["id"], ""), "free"); plan_samples[plan_code]["users"].add(item["id"]); plan_samples[plan_code]["activated"] += int(bool(item["activated_at"]))
+            user_rows.append({**{key: (_iso(value) if isinstance(value, datetime) else value.isoformat() if hasattr(value, "isoformat") else value) for key, value in item.items()}, "plan_code": plan_code, "recommended_follow_up": follow_up})
+        for event in events:
+            code = workspace_plan.get(event.workspace_id or "", "free")
+            if event.event_name == ProductEvents.ANALYSIS_SUCCEEDED: plan_samples[code]["successful_analyses"] += 1
+            if event.feature_area and event.user_id: plan_samples[code]["features"][event.feature_area].add(event.user_id)
+        plan_segments = [{"plan": code, "sample_users": len(values["users"]), "activated_users": values["activated"], "activation_rate": _rate(values["activated"], len(values["users"])), "successful_analyses": values["successful_analyses"], "feature_adoption": [{"feature": feature, "users": len(users)} for feature, users in sorted(values["features"].items())]} for code, values in sorted(plan_samples.items())]
         return {
             "range_days": days, "summary": {"signups": total, "verified": sum(bool(item["verified"]) for item in profiles), "activated": activated, "activation_rate": _rate(activated, total), "activated_within_24h": activated_24h, "returning_users": sum(bool(item["returned"]) for item in profiles)},
             "funnel": funnel, "retention": {"d1": _rate(d1, len(d1_eligible)), "d7": _rate(d7, len(d7_eligible)), "d1_eligible": len(d1_eligible), "d7_eligible": len(d7_eligible)},
             "feature_adoption": [{"feature": key, "users": len(value), "adoption": _rate(len(value), total)} for key, value in sorted(feature_users.items())],
             "analysis": {"successful": sum(item.event_name == ProductEvents.ANALYSIS_SUCCEEDED for item in events), "failed": sum(item.event_name == ProductEvents.ANALYSIS_FAILED for item in events), "fallback_used": sum(item.event_name == ProductEvents.ANALYSIS_SUCCEEDED and bool((item.properties or {}).get("fallback")) for item in events), "cached": sum(item.event_name == ProductEvents.ANALYSIS_SUCCEEDED and bool((item.properties or {}).get("cached")) for item in events), "failure_categories": [{"category": key, "count": value} for key, value in failures.most_common()], "ratings": len(feedback), "helpful_rate": _rate(helpful, len(feedback))},
             "users": user_rows,
+            "plan_segments": plan_segments,
         }
 
 

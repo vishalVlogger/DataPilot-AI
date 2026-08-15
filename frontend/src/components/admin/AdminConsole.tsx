@@ -9,6 +9,8 @@ import {
   adminRetryJob,
   adminSetBetaStatus,
   adminUpdateFeedback,
+  adminUpdateCommercialRequest,
+  adminAssignManualPlan,
   adminUserAction,
   FeedbackAttachment,
   getFeedbackAttachment,
@@ -38,6 +40,7 @@ const sections = new Set([
   "support",
   "audit",
   "business",
+  "commercial",
   "settings",
 ]);
 const nav = [
@@ -45,7 +48,6 @@ const nav = [
     label: "Overview",
     items: [
       ["overview", "Overview"],
-      ["product", "Product Analytics"],
     ],
   },
   {
@@ -74,7 +76,7 @@ const nav = [
     ],
   },
   { label: "Security", items: [["audit", "Audit Log"]] },
-  { label: "Business", items: [["business", "Revenue & Costs"]] },
+  { label: "Business", items: [["commercial", "Commercial"], ["product", "Product Analytics"], ["business", "Revenue & Costs"]] },
   { label: "", items: [["settings", "Settings"]] },
 ] as const;
 const labels: Record<string, string> = {
@@ -92,6 +94,7 @@ const labels: Record<string, string> = {
   support: "Support lookup",
   audit: "System-admin audit",
   business: "Business metrics",
+  commercial: "Commercial",
   settings: "Admin settings",
 };
 
@@ -355,6 +358,15 @@ export default function AdminConsole({
     try {
       if (section === "settings") {
         setData({});
+        return;
+      }
+      if (section === "commercial") {
+        const [summary, requests, trials] = await Promise.all([
+          adminGet<Json>("commercial/summary"),
+          adminGet<{items:Json[]}>("commercial/upgrade-requests"),
+          adminGet<{items:Json[]}>("commercial/trials"),
+        ]);
+        setData({...summary, upgrade_request_items:requests.items, trial_items:trials.items});
         return;
       }
       const params: Record<string, string | number | undefined> = {
@@ -765,6 +777,11 @@ function AdminSection({
           <DataTable items={(data.feature_adoption as Json[]) ?? []} />
         </section>
         <section className="admin-card">
+          <h2>Activation and analysis by effective plan</h2>
+          <p className="admin-privacy-note">Sample sizes are shown explicitly; manual assignments and trials are segments, not paid-conversion claims.</p>
+          <DataTable items={(data.plan_segments as Json[]) ?? []} />
+        </section>
+        <section className="admin-card">
           <h2>Beta users and recommended follow-up</h2>
           <DataTable
             items={users}
@@ -1098,6 +1115,20 @@ function AdminSection({
           <p>{valueText(data.revenue_message)}</p>
         </section>
       </>
+    );
+  if (section === "commercial")
+    return (
+      <div className="admin-commercial">
+        <MetricGrid data={{active_trials:data.active_trials,trials_expiring_5_days:data.trials_expiring_5_days,manual_subscriptions:data.manual_subscriptions,workspaces_over_limit:((data.workspaces_over_limit as Json[])??[]).length}} />
+        <div className="admin-grid">
+          <section className="admin-card"><h2>Effective plan distribution</h2><DataTable items={(data.plan_distribution as Json[])??[]} /></section>
+          <section className="admin-card"><h2>Commercial funnel</h2><div className="diagnostic-grid">{Object.entries((data.commercial_funnel as Json)??{}).map(([key,value])=><div key={key}><span>{key.replaceAll("_"," ")}</span><b>{valueText(value)}</b></div>)}</div></section>
+        </div>
+        <section className="admin-card"><div className="panel-title"><div><p className="eyebrow">UPGRADE LEADS</p><h2>Upgrade requests</h2></div><small>Approvals and manual assignments are audited. They do not record revenue.</small></div><div className="commercial-request-list">{((data.upgrade_request_items as Json[])??[]).map(item=><article key={String(item.id)}><div><span className={`status-badge ${item.status}`}>{valueText(item.status)}</span><h3>{valueText(item.workspace_name)}</h3><p>{valueText(item.user_email)} requested <b>{valueText(item.requested_plan)}</b></p>{Boolean(item.message)&&<small>{valueText(item.message)}</small>}</div><div className="admin-actions"><button className="secondary" onClick={()=>requestAction("Mark this request as contacted?",()=>adminUpdateCommercialRequest(String(item.id),"contacted"))}>Contacted</button><button className="secondary" onClick={()=>requestAction("Decline this upgrade request?",()=>adminUpdateCommercialRequest(String(item.id),"declined"))}>Decline</button><button onClick={()=>requestAction(`Approve and manually activate ${valueText(item.requested_plan)} for ${valueText(item.workspace_name)}?`,async()=>{await adminAssignManualPlan(String(item.workspace_id),String(item.requested_plan) as "pro"|"business");return adminUpdateCommercialRequest(String(item.id),"approved");})}>Activate {valueText(item.requested_plan)}</button></div></article>)}{!((data.upgrade_request_items as Json[])??[]).length&&<div className="admin-empty">No upgrade requests yet.</div>}</div></section>
+        <div className="admin-grid"><section className="admin-card"><h2>Trials</h2><DataTable items={(data.trial_items as Json[])??[]} /></section><section className="admin-card"><h2>External AI usage by plan</h2><DataTable items={(data.external_ai_usage_by_plan as Json[])??[]} /></section></div>
+        {((data.workspaces_over_limit as Json[])??[]).length>0&&<section className="admin-card"><h2>Workspaces over limit</h2><DataTable items={(data.workspaces_over_limit as Json[])??[]} /></section>}
+        <div className="admin-grid"><section className="admin-unavailable"><h2>Revenue unavailable</h2><p>{valueText(data.revenue_message)}</p></section><section className="admin-unavailable"><h2>Profit unavailable</h2><p>{valueText(data.profit_message)}</p></section></div>
+      </div>
     );
   if (section === "settings")
     return (

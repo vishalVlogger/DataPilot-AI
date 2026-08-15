@@ -82,6 +82,8 @@ Register the first account in the UI. Its default workspace uses the Free plan; 
 
 Milestone 8 adds a privacy-safe activation funnel, guided onboarding with quota-free sample data, structured result/feature feedback, and a metadata-only Product Analytics view at `/admin/product`. See the [beta launch checklist](docs/beta-launch-checklist.md), [beta user guide](docs/beta-user-guide.md), and [product analytics admin guide](docs/product-analytics-admin.md).
 
+Milestone 9 adds a centralized Free/Pro/Business catalog, effective-plan entitlements, one-time Pro trials, idempotent usage metering, provider-neutral subscription records, upgrade requests, public pricing, contextual limit guidance, and a Commercial section in System Admin. Payment checkout and revenue reporting remain intentionally disabled until a real billing provider is integrated. See the [commercial model](docs/commercial-model.md) and [commercial admin playbook](docs/commercial-admin-playbook.md).
+
 ## Test and build
 
 System administrators use the dedicated `/admin` Platform Console for metadata-only platform operations. Workspace administrators manage one workspace and cannot access this console. See [System Admin Console](docs/admin.md) for routes, privacy boundaries, and audited CLI promotion.

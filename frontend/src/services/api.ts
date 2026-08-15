@@ -5,9 +5,13 @@ let accessToken: string | null = null;
 let workspaceId: string | null = null;
 
 export type User = { id:string; email:string; display_name:string; is_active:boolean; is_system_admin:boolean; email_verified_at:string|null; beta_acknowledged_at:string|null; created_at:string; last_login_at:string|null; acquisition_source:string; beta_status:string };
-export type Workspace = { id:string; name:string; slug:string; role:"owner"|"admin"|"member"; owner_user_id:string; plan_code:string; external_ai_enabled:boolean; created_at:string; updated_at:string; deletion_requested_at:string|null; deletion_scheduled_for:string|null };
+export type Workspace = { id:string; name:string; slug:string; role:"owner"|"admin"|"member"; owner_user_id:string; plan_code:string; external_ai_enabled:boolean; created_at:string; updated_at:string; deletion_requested_at:string|null; deletion_scheduled_for:string|null;trial_started_at?:string|null;trial_ends_at?:string|null;trial_plan?:string|null;trial_status?:string };
 export type AuthPayload = { access_token:string; expires_in:number; user:User; workspaces:Workspace[]; email_delivery_status?:string|null; development_verification_url?:string|null };
-export type Usage = { plan_code:string; datasets:number; storage_bytes:number; analyses_this_month:number; ai_requests_this_month:number; reports_this_month:number; rows_this_month:number; limits:Record<string,number>; percentages:Record<string,number> };
+export type UsageResource={used:number;limit:number;percent:number;level:"normal"|"warning"|"critical"|"limit"};
+export type Usage = { plan_code:string;base_plan_code:string;plan_source:string;datasets:number;storage_bytes:number;analyses_this_month:number;ai_requests_this_month:number;reports_this_month:number;exports_this_month:number;members:number;rows_this_month:number;limits:Record<string,number>;percentages:Record<string,number>;features:string[];usage:Record<string,UsageResource>;period:{type:string;start:string;end:string};over_limit:boolean };
+export type PublicPlan={code:string;name:string;description:string;limits:Record<string,number>;features:string[];trial_available:boolean;upgrade_order:number;active:boolean;price:{monthly:number|null;currency:string;configured:boolean}};
+export type PlansResponse={plans:PublicPlan[];currency:string;billing_provider:string;payments_enabled:boolean;annual_pricing_available:boolean};
+export type SubscriptionState={effective_plan:PublicPlan;base_plan_code:string;plan_source:string;trial:{eligible:boolean;status:string;plan:string|null;started_at:string|null;ends_at:string|null;days_remaining:number|null};subscription:Record<string,unknown>|null;usage:Usage;upgrade_options:PublicPlan[];data_retention_policy:string};
 export type Activity = { id:string; activity_type:string; user_id:string|null; resource_id:string|null; details:Record<string,unknown>|null; created_at:string };
 export type Dashboard = { usage:Usage; recent_datasets:Array<Record<string,unknown>>; recent_activity:Activity[] };
 export type Member={user_id:string;email:string;display_name:string;role:"owner"|"admin"|"member";joined_at:string};
@@ -30,7 +34,7 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
 
 async function parse<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) { const context={request_id:payload.request_id as string|undefined,route:new URL(response.url).pathname,error_code:payload.error_code as string|undefined,page:typeof window!=="undefined"?window.location.pathname:undefined,occurred_at:Date.now()};if(typeof window!=="undefined")sessionStorage.setItem("datapilot_last_error",JSON.stringify(context));throw new Error(`${payload.message ?? "Request failed"}${payload.request_id?` Reference ID: ${payload.request_id}`:""}`); }
+  if (!response.ok) { const context={request_id:payload.request_id as string|undefined,route:new URL(response.url).pathname,error_code:(payload.code??payload.error_code) as string|undefined,page:typeof window!=="undefined"?window.location.pathname:undefined,occurred_at:Date.now()};if(typeof window!=="undefined")sessionStorage.setItem("datapilot_last_error",JSON.stringify(context));const error=new Error(`${payload.message ?? "Request failed"}${payload.request_id?` Reference ID: ${payload.request_id}`:""}`) as Error&{code?:string;resource?:string;used?:number;limit?:number;upgrade_recommended?:boolean};error.code=payload.code??payload.error_code;error.resource=payload.resource;error.used=payload.used;error.limit=payload.limit;error.upgrade_recommended=payload.upgrade_recommended;throw error; }
   return payload as T;
 }
 
@@ -51,6 +55,10 @@ export async function resendVerification():Promise<{message:string;delivery_stat
 export async function forgotPassword(email:string):Promise<{message:string}>{return parse(await apiFetch("/auth/forgot-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email})}));}
 export async function resetPassword(token:string,newPassword:string):Promise<{message:string}>{return parse(await apiFetch("/auth/reset-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token,new_password:newPassword})}));}
 export async function getUsage():Promise<Usage> { return parse(await apiFetch("/usage")); }
+export async function getPlans():Promise<PlansResponse>{return parse(await apiFetch("/plans"));}
+export async function getSubscription(workspaceId:string):Promise<SubscriptionState>{return parse(await apiFetch(`/workspaces/${workspaceId}/subscription`));}
+export async function startTrial(workspaceId:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/workspaces/${workspaceId}/trial/start`,{method:"POST"}));}
+export async function requestUpgrade(workspaceId:string,requestedPlan:"pro"|"business",message?:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/workspaces/${workspaceId}/upgrade-request`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({requested_plan:requestedPlan,message})}));}
 export async function getActivity(limit=50,offset=0):Promise<Activity[]> { return parse(await apiFetch(`/activity?limit=${limit}&offset=${offset}`)); }
 export async function getDashboard():Promise<Dashboard> { return parse(await apiFetch("/dashboard")); }
 export async function listMembers(id:string):Promise<Member[]>{return parse(await apiFetch(`/workspaces/${id}/members`));}
@@ -77,6 +85,8 @@ export async function adminGet<T=Record<string,unknown>>(section:string,params:R
 export async function adminUserAction(userId:string,action:"activate"|"deactivate"|"grant_admin"|"revoke_admin"):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/users/${userId}/actions`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,confirmed:true})}));}
 export async function adminRetryJob(jobId:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/jobs/${jobId}/retry?confirmed=true`,{method:"POST"}));}
 export async function adminUpdateFeedback(feedbackId:string,status:string,priority:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/feedback/${feedbackId}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({status,priority})}));}
+export async function adminUpdateCommercialRequest(id:string,status:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/commercial/upgrade-requests/${id}/status`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({status})}));}
+export async function adminAssignManualPlan(workspaceId:string,planCode:"pro"|"business"|"none",expiresAt?:string):Promise<Record<string,unknown>>{return parse(await apiFetch(`/admin/commercial/workspaces/${workspaceId}/manual-plan`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({plan_code:planCode,expires_at:expiresAt,confirmed:true})}));}
 export type OnboardingState={steps:Array<{key:string;label:string;complete:boolean}>;completed:number;total:number;dismissed:boolean;complete:boolean;welcome:string};
 export async function getOnboarding():Promise<OnboardingState>{return parse(await apiFetch("/onboarding"));}
 export async function dismissOnboarding():Promise<{dismissed:boolean}>{return parse(await apiFetch("/onboarding/dismiss",{method:"POST"}));}

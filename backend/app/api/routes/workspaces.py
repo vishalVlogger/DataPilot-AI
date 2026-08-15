@@ -17,6 +17,7 @@ from app.services.features import feature_flags
 from app.services.jobs.manager import JobManager
 from app.services.workspace_lifecycle import cancel_workspace_deletion, ensure_workspace_writable, schedule_workspace_deletion
 from app.services.product_analytics import ProductEvents, record_product_event
+from app.services.saas import UsageService
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
@@ -77,6 +78,8 @@ async def invite_member(workspace_id: str, payload: InvitationCreateRequest, req
     token, token_hash = new_one_time_token(); settings = get_settings()
     with session_scope() as session:
         _manager(session, workspace_id, user.id, writable=True)
+        UsageService(workspace_id).enforce_feature("workspace_collaboration")
+        UsageService(workspace_id).enforce_member()
         item = InvitationRepository(session, workspace_id).create(str(payload.email), normalized_email, payload.role, token_hash, user.id, datetime.now(timezone.utc) + timedelta(days=settings.invitation_expire_days))
         response = InvitationResponse.model_validate(item, from_attributes=True)
     delivery_status, development_link = await _deliver_invitation(str(payload.email), token)
@@ -130,6 +133,7 @@ async def remove_member(workspace_id: str, user_id: str, user=Depends(authentica
 @router.post("/{workspace_id}/export", status_code=202)
 async def export_workspace(workspace_id: str, payload: WorkspaceExportRequest, user=Depends(authenticated_user)) -> dict:
     with session_scope() as session: _manager(session, workspace_id, user.id)
+    usage = UsageService(workspace_id); usage.enforce_feature("workspace_export"); usage.enforce_export()
     job = JobManager().create_workspace_export_job(workspace_id, user.id, payload.include_raw_datasets)
     return {"job_id": job["id"], "status": job["status"], "includes_raw_datasets": payload.include_raw_datasets}
 

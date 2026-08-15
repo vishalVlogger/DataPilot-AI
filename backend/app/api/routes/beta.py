@@ -15,6 +15,7 @@ from app.services.cleanup import CleanupService
 from app.services.email import email_delivery_diagnostics
 from app.services.feedback_attachments import FeedbackAttachmentStorage, validate_feedback_attachment
 from app.services.product_analytics import ProductEvents, record_product_event
+from app.services.saas import UsageService
 
 router = APIRouter(tags=["beta"])
 
@@ -80,9 +81,10 @@ async def provider_status(principal: Principal = Depends(require_auth)) -> dict:
         workspace = WorkspaceRepository(session).get_for_user(principal.workspace_id, principal.user_id)
         user = UserRepository(session).get(principal.user_id)
     external_configured = settings.ai_provider == "openai"
-    external_allowed = settings.feature_external_ai and workspace.get("external_ai_enabled", True) and user.email_verified_at is not None
+    plan_external_ai = UsageService(principal.workspace_id).has("external_ai")
+    external_allowed = settings.feature_external_ai and workspace.get("external_ai_enabled", True) and user.email_verified_at is not None and plan_external_ai
     effective = settings.ai_provider if not external_configured or external_allowed else "mock"
-    return {"app_version": settings.app_version, "configured_provider": settings.ai_provider, "effective_provider": effective, "external_ai_enabled": workspace.get("external_ai_enabled", True), "external_ai_allowed": external_allowed, "email_verified": user.email_verified_at is not None, "privacy_notice": "External AI receives the question, schema metadata, validated plan, and calculated result summary—not full dataset rows by default."}
+    return {"app_version": settings.app_version, "configured_provider": settings.ai_provider, "effective_provider": effective, "external_ai_enabled": workspace.get("external_ai_enabled", True), "external_ai_allowed": external_allowed, "external_ai_plan_entitled": plan_external_ai, "email_verified": user.email_verified_at is not None, "privacy_notice": "External AI receives the question, schema metadata, validated plan, and calculated result summary—not full dataset rows by default."}
 
 
 @router.get("/admin/feedback")

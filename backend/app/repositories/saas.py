@@ -4,6 +4,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
@@ -89,8 +90,11 @@ class RefreshSessionRepository:
 
 class UsageRepository:
     def __init__(self, session: Session, workspace_id: str) -> None: self.session = session; self.workspace_id = workspace_id
-    def record(self, event_type: str, quantity: int = 1, user_id: str | None = None, resource_id: str | None = None, details: dict | None = None) -> None:
-        self.session.add(UsageEvent(workspace_id=self.workspace_id, user_id=user_id, event_type=event_type, quantity=quantity, resource_id=resource_id, details=details)); self.session.commit()
+    def record(self, event_type: str, quantity: int = 1, user_id: str | None = None, resource_id: str | None = None, details: dict | None = None, meter_key: str | None = None) -> bool:
+        if meter_key and self.session.scalar(select(UsageEvent.id).where(UsageEvent.workspace_id == self.workspace_id, UsageEvent.meter_key == meter_key)): return False
+        self.session.add(UsageEvent(workspace_id=self.workspace_id, user_id=user_id, event_type=event_type, quantity=quantity, resource_id=resource_id, details=details, meter_key=meter_key))
+        try: self.session.commit(); return True
+        except IntegrityError: self.session.rollback(); return False
     def total(self, event_type: str, since: datetime | None = None) -> int:
         query = select(func.coalesce(func.sum(UsageEvent.quantity), 0)).where(UsageEvent.workspace_id == self.workspace_id, UsageEvent.event_type == event_type)
         if since is not None: query = query.where(UsageEvent.created_at >= since)

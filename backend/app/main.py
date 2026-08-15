@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import admin, auth, beta, datasets, health, history, notifications, product, saas, workspaces
+from app.api.routes import admin, auth, beta, commercial, datasets, health, history, notifications, product, saas, workspaces
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.observability import initialize_sentry, request_id_context
@@ -41,6 +41,7 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allo
 app.include_router(health.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(workspaces.router, prefix="/api")
+app.include_router(commercial.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(beta.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
@@ -73,7 +74,9 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     record_system_error(getattr(request.state, "request_id", None), exc.error_code, request.url.path, request.method, exc.status_code, exc.message, getattr(request.state, "user_id", None), getattr(request.state, "workspace_id", None))
     if any(segment in request.url.path for segment in ("/ask", "/analyze", "/chart")):
         record_product_event(ProductEvents.ANALYSIS_FAILED, getattr(request.state, "user_id", None), getattr(request.state, "workspace_id", None), properties={"failure_category": analysis_failure_category(exc.error_code)})
-    return JSONResponse(status_code=exc.status_code, content={"success": False, "message": exc.message, "error_code": exc.error_code, "request_id": getattr(request.state, "request_id", None)})
+    content = {"success": False, "message": exc.message, "error_code": exc.error_code, "request_id": getattr(request.state, "request_id", None)}
+    if exc.details: content.update(exc.details)
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 @app.exception_handler(RequestValidationError)

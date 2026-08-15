@@ -6,7 +6,7 @@ import logging
 from fastapi.encoders import jsonable_encoder
 import pandas as pd
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from app.core.config import get_settings
@@ -51,8 +51,10 @@ def _configured_ai_provider(settings):
     with session_scope() as session:
         user = UserRepository(session).get(principal.user_id)
         workspace = WorkspaceRepository(session).get_for_user(principal.workspace_id, principal.user_id)
-    if not feature_flags.enabled("external_ai") or not workspace.get("external_ai_enabled", True) or user.email_verified_at is None:
+    entitlements = UsageService(principal.workspace_id)
+    if not feature_flags.enabled("external_ai") or not workspace.get("external_ai_enabled", True) or user.email_verified_at is None or not entitlements.has("external_ai"):
         return MockAIProvider()
+    entitlements.enforce_ai()
     return get_ai_provider(settings)
 
 
@@ -91,7 +93,7 @@ def _record_run(dataset_id: str, requested_session_id: str | None, version: int,
             ai_explanation=explanation, success=True,
         )
         DatasetRepository(session, principal.workspace_id).mark_analyzed(dataset_id)
-    usage = UsageService(principal.workspace_id); usage.record("analysis", 1, principal.user_id, dataset_id); usage.activity("analysis_executed", principal.user_id, dataset_id, {"operation": plan.operation})
+    usage = UsageService(principal.workspace_id); usage.record("analysis", 1, principal.user_id, dataset_id, meter_key=f"analysis:{run['id']}"); usage.activity("analysis_executed", principal.user_id, dataset_id, {"operation": plan.operation})
     record_product_event(ProductEvents.ANALYSIS_SUCCEEDED, principal.user_id, principal.workspace_id, "analysis_run", run["id"], {"operation": plan.operation, "engine": engine, "fallback": fallback, "cached": cached})
     return session_record["id"], run["id"]
 
@@ -113,11 +115,11 @@ async def inspect_dataset(file: UploadFile = File(...)) -> InspectResponse:
 async def upload_dataset(file: UploadFile = File(...), sheet_name: str | None = Form(default=None), header_row: int = Form(default=0)) -> DatasetMetadata:
     settings = get_settings(); principal = current_principal(); usage = UsageService(principal.workspace_id); _, plan = usage.plan(); rate_limiter.check(f"upload:{principal.user_id}", 20, 60)
     content = await file.read(plan.upload_bytes + 1); usage.enforce_upload(len(content))
-    frame, source_type, selected_sheet = parse_dataset(file.filename or "upload", content, plan.upload_bytes // 1024 // 1024, plan.rows_per_dataset, settings.max_columns, sheet_name, header_row); usage.enforce_upload(len(content), len(frame))
+    frame, source_type, selected_sheet = parse_dataset(file.filename or "upload", content, plan.upload_bytes // 1024 // 1024, plan.rows_per_dataset, min(settings.max_columns, plan.max_columns), sheet_name, header_row); usage.enforce_upload(len(content), len(frame), len(frame.columns))
     store = storage()
     metadata = store.save(frame, file.filename or "upload", source_type, selected_sheet, content)
     store.update_profile(metadata["id"], profile_dataset(frame, metadata["id"]))
-    usage.record("dataset_upload", 1, principal.user_id, metadata["id"], {"source_type": source_type}); usage.record("rows_uploaded", len(frame), principal.user_id, metadata["id"]); usage.record("storage_consumed", metadata["storage_bytes"], principal.user_id, metadata["id"]); usage.activity("dataset_uploaded", principal.user_id, metadata["id"], {"name": metadata["name"], "rows": len(frame)})
+    usage.record("dataset_upload", 1, principal.user_id, metadata["id"], {"source_type": source_type}, f"dataset:{metadata['id']}"); usage.record("rows_uploaded", len(frame), principal.user_id, metadata["id"], meter_key=f"rows:{metadata['id']}"); usage.record("storage_consumed", metadata["storage_bytes"], principal.user_id, metadata["id"], meter_key=f"storage:{metadata['id']}"); usage.activity("dataset_uploaded", principal.user_id, metadata["id"], {"name": metadata["name"], "rows": len(frame)})
     rows_bucket = "under_1k" if len(frame) < 1000 else "under_100k" if len(frame) < 100000 else "100k_plus"
     record_product_event(ProductEvents.DATASET_UPLOADED, principal.user_id, principal.workspace_id, "dataset", metadata["id"], {"source_type": source_type, "rows_bucket": rows_bucket, "is_sample": False})
     return DatasetMetadata.model_validate(metadata)
@@ -150,7 +152,7 @@ async def get_profile(dataset_id: str) -> DatasetProfile:
 
 @router.post("/{dataset_id}/ask", response_model=AskResponse)
 async def ask_dataset(dataset_id: str, request: AskRequest) -> AskResponse:
-    settings = get_settings(); principal = current_principal(); usage = UsageService(principal.workspace_id); usage.enforce_analysis(); usage.enforce_ai(); rate_limiter.check(f"ask:{principal.user_id}", 30, 60)
+    settings = get_settings(); principal = current_principal(); usage = UsageService(principal.workspace_id); usage.enforce_analysis(); rate_limiter.check(f"ask:{principal.user_id}", 30, 60)
     load_started = perf_counter(); store = storage(); metadata_record = store.load_metadata(dataset_id)
     profile = metadata_record.get("profile_summary")
     if not profile or any("semantic_role" not in item for item in profile.get("columns", [])):
@@ -187,8 +189,10 @@ async def ask_dataset(dataset_id: str, request: AskRequest) -> AskResponse:
     session_id, run_id = _record_run(dataset_id, request.session_id, version, request.question, plan, result, engine_result.engine, engine_result.duration_ms, answer, fallback_used, cached is not None)
     metadata = {"execution_engine": engine_result.engine, "dataset_version": version, "load_ms": load_ms, "execution_ms": engine_result.duration_ms, "ai_interpretation_ms": interpretation_ms, "provider_fallback": fallback_used, "cached": cached is not None, "session_id": session_id, "run_id": run_id, "interpreted_as": describe_chart_plan(plan, request.question)["interpreted_as"]}
     logger.info("analysis_complete", extra={"dataset_id": dataset_id, **metadata})
-    usage.record("ai_request", 1, principal.user_id, dataset_id)
-    usage.record("ask_data", 1, principal.user_id, dataset_id)
+    if settings.ai_provider == "openai" and not isinstance(provider, MockAIProvider) and not fallback_used:
+        usage.record("external_ai_call", 1, principal.user_id, run_id, meter_key=f"external-ai:{run_id}")
+        usage.record("ai_request", 1, principal.user_id, run_id, meter_key=f"ai-request:{run_id}")
+    usage.record("ask_data", 1, principal.user_id, run_id, meter_key=f"ask:{run_id}")
     return AskResponse(question=request.question, plan=plan, answer=answer, result=result, chart_suggestion=suggestion, explanation=explanation, metadata=metadata)
 
 
@@ -239,6 +243,7 @@ async def get_quality(dataset_id: str) -> list[QualityIssue]:
 
 @router.post("/{dataset_id}/clean/preview", response_model=CleaningPreview)
 async def preview_cleaning(dataset_id: str, request: CleaningRequest) -> CleaningPreview:
+    UsageService(current_principal().workspace_id).enforce_feature("advanced_cleaning")
     _, preview = clean_frame(storage().load_frame(dataset_id), request.operations)
     principal = current_principal(); record_product_event(ProductEvents.CLEANING_PREVIEWED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"operation": request.operations[0].type if request.operations else "unknown"})
     return preview
@@ -246,6 +251,7 @@ async def preview_cleaning(dataset_id: str, request: CleaningRequest) -> Cleanin
 
 @router.post("/{dataset_id}/clean/apply", response_model=CleaningApplyResponse)
 async def apply_cleaning(dataset_id: str, request: CleaningRequest) -> CleaningApplyResponse:
+    UsageService(current_principal().workspace_id).enforce_feature("advanced_cleaning")
     if not request.confirmed:
         from app.core.errors import AppError
         raise AppError("Cleaning changes must be previewed and explicitly confirmed.", "CLEANING_APPLY_FAILED")
@@ -287,13 +293,13 @@ async def restore_version(dataset_id: str, version: int) -> CleaningApplyRespons
 
 
 @router.post("/{dataset_id}/report")
-async def create_report(dataset_id: str, request: ReportRequest) -> Response:
+async def create_report(dataset_id: str, request: ReportRequest, http_request: Request) -> Response:
     settings = get_settings(); principal = current_principal(); usage = UsageService(principal.workspace_id); usage.enforce_report(); rate_limiter.check(f"report:{principal.user_id}", 10, 60); store = storage(); store.load_metadata(dataset_id)
     if request.format == "pdf" and not feature_flags.enabled("pdf_reports"): raise AppError("PDF reports are disabled.", "REPORT_FORMAT_DISABLED", 400)
-    usage.record("report", 1, principal.user_id, dataset_id); usage.activity("report_generated", principal.user_id, dataset_id, {"format": request.format, "async": request.async_job})
-    record_product_event(ProductEvents.REPORT_REQUESTED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"report_format": request.format})
+    if request.format == "pdf": usage.enforce_feature("pdf_reports", "PDF reports are not included in your current plan.")
     if request.async_job and settings.background_jobs_enabled:
         job = JobManager().create_report_job(dataset_id, request, store)
+        record_product_event(ProductEvents.REPORT_REQUESTED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"report_format": request.format})
         return JSONResponse(content={"job_id": job["id"], "status": job["status"]}, status_code=202)
     frame = store.load_frame(dataset_id)
     if request.format == "pdf":
@@ -302,29 +308,33 @@ async def create_report(dataset_id: str, request: ReportRequest) -> Response:
             raise AppError("PDF reports are disabled.", "REPORT_FORMAT_DISABLED", 400)
         content = generate_pdf_report(frame, dataset_id, request, store.list_versions(dataset_id))
         safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", request.title).strip("_") or "DataPilot_Report"
+        usage.record("report", 1, principal.user_id, dataset_id, {"format": "pdf", "async": False}, f"report:{http_request.state.request_id}"); usage.activity("report_generated", principal.user_id, dataset_id, {"format": "pdf", "async": False}); record_product_event(ProductEvents.REPORT_REQUESTED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"report_format": "pdf"})
         return Response(content, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{safe_name}.pdf"'})
     html, duration_ms = generate_html_report(frame, dataset_id, request, store.list_versions(dataset_id))
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", request.title).strip("_") or "DataPilot_Report"
     logger.info("report_generated", extra={"dataset_id": dataset_id, "report_generation_ms": duration_ms})
+    usage.record("report", 1, principal.user_id, dataset_id, {"format": "html", "async": False}, f"report:{http_request.state.request_id}"); usage.activity("report_generated", principal.user_id, dataset_id, {"format": "html", "async": False}); record_product_event(ProductEvents.REPORT_REQUESTED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"report_format": "html"})
     return HTMLResponse(html, headers={"Content-Disposition": f'inline; filename="{safe_name}.html"', "X-Report-Generation-Ms": str(duration_ms)})
 
 
 @router.get("/{dataset_id}/export")
 async def export_dataset(
     dataset_id: str,
+    request: Request,
     format: str = Query(default="csv", pattern="^(csv|xlsx)$"),
     version: str = Query(default="current", pattern="^(current|original)$"),
 ) -> StreamingResponse:
-    store = storage(); principal = current_principal(); UsageService(principal.workspace_id).record("export", 1, principal.user_id, dataset_id, {"format": format, "version": version})
-    record_product_event(ProductEvents.EXPORT_DOWNLOADED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"export_format": format, "version": version})
+    store = storage(); principal = current_principal(); usage = UsageService(principal.workspace_id); usage.enforce_export()
     frame = store.load_original_frame(dataset_id) if version == "original" else store.load_frame(dataset_id)
     metadata = store.load_metadata(dataset_id)
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(metadata["name"]).stem).strip("_") or "dataset"
     if format == "csv":
         content = frame.to_csv(index=False).encode("utf-8-sig")
+        usage.record("export", 1, principal.user_id, dataset_id, {"format": format, "version": version}, f"export:{request.state.request_id}"); record_product_event(ProductEvents.EXPORT_DOWNLOADED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"export_format": format, "version": version})
         return StreamingResponse(iter([content]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{stem}_{version}.csv"'})
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         frame.to_excel(writer, sheet_name="Data", index=False)
     output.seek(0)
+    usage.record("export", 1, principal.user_id, dataset_id, {"format": format, "version": version}, f"export:{request.state.request_id}"); record_product_event(ProductEvents.EXPORT_DOWNLOADED, principal.user_id, principal.workspace_id, "dataset", dataset_id, {"export_format": format, "version": version})
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{stem}_{version}.xlsx"'})

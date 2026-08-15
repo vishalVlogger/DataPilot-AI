@@ -32,6 +32,7 @@ class UserResponse(BaseModel):
 
 class WorkspaceResponse(BaseModel):
     id: str; name: str; slug: str; owner_user_id: str; role: Literal["owner", "admin", "member"]; plan_code: str; external_ai_enabled: bool = True; created_at: datetime; updated_at: datetime; deletion_requested_at: datetime | None = None; deletion_scheduled_for: datetime | None = None
+    trial_started_at: datetime | None = None; trial_ends_at: datetime | None = None; trial_plan: str | None = None; trial_status: str = "none"
 
 
 class AuthResponse(BaseModel):
@@ -56,6 +57,7 @@ class WorkspaceUpdateRequest(BaseModel):
 
 class UsageSummaryResponse(BaseModel):
     plan_code: str; datasets: int; storage_bytes: int; analyses_this_month: int; ai_requests_this_month: int; reports_this_month: int; rows_this_month: int; limits: dict[str, int]; percentages: dict[str, float]
+    base_plan_code: str = "free"; plan_source: str = "base"; exports_this_month: int = 0; members: int = 0; features: list[str] = Field(default_factory=list); period: dict[str, Any] = Field(default_factory=dict); usage: dict[str, dict[str, Any]] = Field(default_factory=dict); over_limit: bool = False
 
 
 class ActivityResponse(BaseModel):

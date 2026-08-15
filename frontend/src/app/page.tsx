@@ -118,6 +118,7 @@ export default function Home() {
     [chartTitle, setChartTitle] = useState("");
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
+    [planLimit, setPlanLimit] = useState(false),
     [chartBusy, setChartBusy] = useState(false),
     [chartError, setChartError] = useState(""),
     [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -166,6 +167,7 @@ export default function Home() {
       }
   }
   function fail(reason: unknown) {
+    setPlanLimit(Boolean(reason instanceof Error && (reason as Error & {upgrade_recommended?:boolean}).upgrade_recommended));
     setError(reason instanceof Error ? reason.message : "The request failed");
   }
   async function refreshSupporting(id: string) {
@@ -570,6 +572,7 @@ export default function Home() {
           <p>Workspace</p>
           <Link href="/history">Activity</Link>
           <Link href="/settings">Settings</Link>
+          <Link href="/pricing">Plans</Link>
           <p>Support</p>
           <Link href="/feedback">Send Feedback</Link>
         </nav>
@@ -838,8 +841,8 @@ export default function Home() {
         )}
         {error && (
           <div className="error">
-            {error}
-            <button onClick={() => setError("")}>×</button>
+            <span>{error}{planLimit&&<> <Link href="/pricing">View plans</Link></>}</span>
+            <button onClick={() => {setError("");setPlanLimit(false);}}>×</button>
           </div>
         )}
         {dataset && profile && (

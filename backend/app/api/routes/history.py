@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 
 from app.core.auth import current_principal, require_auth
@@ -74,7 +74,7 @@ async def list_session_runs(session_id: str, limit: int = Query(50, ge=1, le=100
 
 @router.post("/datasets/{dataset_id}/saved-analyses", response_model=SavedAnalysisResponse, status_code=201)
 async def save_analysis(dataset_id: str, request: SavedAnalysisRequest) -> SavedAnalysisResponse:
-    principal = current_principal(); storage().load_metadata(dataset_id)
+    principal = current_principal(); UsageService(principal.workspace_id).enforce_feature("saved_analyses"); storage().load_metadata(dataset_id)
     with session_scope() as session: item = SavedAnalysisRepository(session, principal.workspace_id).create(dataset_id, request.name, request.plan.model_dump(mode="json"), request.chart_config, principal.user_id)
     UsageService(principal.workspace_id).activity("analysis_saved", principal.user_id, dataset_id, {"saved_analysis_id": item["id"], "name": request.name})
     record_product_event(ProductEvents.ANALYSIS_SAVED, principal.user_id, principal.workspace_id, "saved_analysis", item["id"])
@@ -95,12 +95,12 @@ async def delete_saved_analysis(analysis_id: str) -> None:
 
 
 @router.post("/saved-analyses/{analysis_id}/run")
-async def run_saved_analysis(analysis_id: str) -> dict:
+async def run_saved_analysis(analysis_id: str, request: Request) -> dict:
     principal = current_principal(); usage = UsageService(principal.workspace_id); usage.enforce_analysis()
     with session_scope() as session:
         saved = SavedAnalysisRepository(session, principal.workspace_id).get(analysis_id); dataset_id, plan_data, chart_config = saved.dataset_id, saved.query_plan, saved.chart_config
     store = storage(); metadata = store.load_metadata(dataset_id); plan = AnalysisPlan.model_validate(plan_data); engine = ExecutionEngineSelector(get_settings()).select(metadata["rows"]); source = store.get_dataset_path(dataset_id) if engine.name == "duckdb" else store.load_frame(dataset_id); result = await engine.execute_plan(source, plan)
-    usage.record("analysis", 1, principal.user_id, dataset_id, {"saved_analysis_id": analysis_id}); usage.activity("saved_analysis_run", principal.user_id, dataset_id, {"saved_analysis_id": analysis_id})
+    usage.record("analysis", 1, principal.user_id, dataset_id, {"saved_analysis_id": analysis_id}, f"saved-analysis-run:{request.state.request_id}"); usage.activity("saved_analysis_run", principal.user_id, dataset_id, {"saved_analysis_id": analysis_id})
     return {"saved_analysis_id": analysis_id, "dataset_id": dataset_id, "plan": plan, "result": result.result, "chart_config": chart_config, "metadata": {"execution_engine": result.engine, "execution_ms": result.duration_ms, "dataset_version": store.current_version(dataset_id)}}
 
 
